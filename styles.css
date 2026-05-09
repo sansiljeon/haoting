@@ -1,0 +1,216 @@
+/* ===========================================================
+   하오팅 중국어 관리자 시스템 - 커스텀 스타일
+   Tailwind CDN 환경에서 @apply 사용이 어려우므로
+   재사용 클래스만 일반 CSS로 정의합니다.
+   =========================================================== */
+
+:root {
+  --brand-50: #ecfdf5;
+  --brand-100: #d1fae5;
+  --brand-500: #10b981;
+  --brand-600: #059669;
+  --brand-700: #047857;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-feature-settings: "ss06", "tnum";
+}
+
+/* ---- 폼 라벨/입력 ---- */
+.form-label {
+  display: block;
+  margin-bottom: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: #334155; /* slate-700 */
+}
+
+.form-label .req {
+  margin-left: 2px;
+  color: var(--brand-600);
+}
+
+.form-input {
+  display: block;
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid #e2e8f0; /* slate-200 */
+  background-color: #ffffff;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.875rem;
+  color: #0f172a; /* slate-900 */
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+
+.form-input::placeholder {
+  color: #94a3b8; /* slate-400 */
+}
+
+.form-input:hover {
+  border-color: #cbd5e1; /* slate-300 */
+}
+
+.form-input:focus {
+  border-color: var(--brand-500);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
+}
+
+textarea.form-input {
+  min-height: 64px;
+  resize: vertical;
+}
+
+/* ---- 사이드바 활성 메뉴 ---- */
+.nav-item.active {
+  background-color: var(--brand-50);
+  color: var(--brand-700);
+}
+
+.nav-item.active i {
+  color: var(--brand-600) !important;
+}
+
+/* ---- 테이블 행 hover ---- */
+.student-row {
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+
+.student-row:hover {
+  background-color: #f8fafc; /* slate-50 */
+}
+
+/* ---- 토스트 페이드 ---- */
+#toast.show {
+  display: inline-block;
+  animation: toast-in 0.18s ease-out;
+}
+
+@keyframes toast-in {
+  from {
+    transform: translate(-50%, 12px);
+    opacity: 0;
+  }
+  to {
+    transform: translate(-50%, 0);
+    opacity: 1;
+  }
+}
+
+/* ---- 모달 표시 ---- */
+.modal-open {
+  display: flex !important;
+}
+
+/* ---- 토글 스위치 ---- */
+.toggle {
+  position: relative;
+  display: inline-flex;
+  height: 1.5rem;
+  width: 2.75rem;
+  flex-shrink: 0;
+  cursor: pointer;
+  border-radius: 9999px;
+  background-color: #cbd5e1; /* slate-300 */
+  transition: background-color 0.18s ease;
+}
+
+.toggle input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.toggle .knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  height: calc(1.5rem - 4px);
+  width: calc(1.5rem - 4px);
+  border-radius: 9999px;
+  background-color: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.2);
+  transition: transform 0.18s ease;
+}
+
+.toggle.is-on {
+  background-color: var(--brand-600);
+}
+
+.toggle.is-on .knob {
+  transform: translateX(1.25rem);
+}
+
+/* ===========================================================
+   모바일 사이드바 (≤767px)
+   - 기본: 화면 왼쪽 바깥(translateX(-100%))으로 밀어둔 상태
+   - .mobile-open 추가 시 translateX(0) 으로 슬라이드 인
+   - 백드롭: opacity + pointer-events 로 페이드 + 클릭 차단
+   ----------------------------------------------------------- */
+@media (max-width: 767px) {
+  #sidebar {
+    /* Tailwind 의 hidden 을 무력화하고 항상 fixed 로 배치 (transform 으로 가시성 제어) */
+    display: flex !important;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 50;
+    width: 16rem; /* w-64 */
+    transform: translateX(-100%);
+    transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.35);
+  }
+
+  #sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  #mobile-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background-color: rgba(15, 23, 42, 0.5);
+    backdrop-filter: blur(2px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s ease-out;
+  }
+
+  #mobile-backdrop.show {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* 사이드바 열림 시 본문 스크롤 잠금은 JS 에서 body overflow 제어로 처리 */
+}
+
+/* 데스크탑(≥768px)에서는 백드롭이 절대 보이지 않도록 보강 */
+@media (min-width: 768px) {
+  #mobile-backdrop {
+    display: none !important;
+  }
+}
+
+/* ---- 스크롤바 ---- */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: #e2e8f0;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: #cbd5e1;
+}

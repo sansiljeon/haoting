@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>하오팅 중국어 관리자 시스템</title>
+    <meta
+      name="description"
+      content="중국어 교습소 '하오팅 중국어' 선생님들을 위한 학생 및 매출 관리 웹앱"
+    />
+
+    <!-- Favicon (런타임에 흰 배경 PNG 로 동적 교체됨) -->
+    <link id="app-favicon" rel="icon" type="image/jpeg" href="./assets/logo.jpg" />
+    <link rel="apple-touch-icon" href="./assets/logo.jpg" />
+
+    <!-- Tailwind CSS (CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Font Awesome (CDN) -->
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+      referrerpolicy="no-referrer"
+    />
+
+    <!-- Pretendard 한글 폰트 -->
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css"
+    />
+
+    <link rel="stylesheet" href="./styles.css" />
+
+    <script>
+      // Tailwind 커스텀 테마 (브랜드 컬러)
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              brand: {
+                50: "#ecfdf5",
+                100: "#d1fae5",
+                200: "#a7f3d0",
+                300: "#6ee7b7",
+                400: "#34d399",
+                500: "#10b981",
+                600: "#059669",
+                700: "#047857",
+                800: "#065f46",
+                900: "#064e3b",
+              },
+            },
+            fontFamily: {
+              sans: [
+                "Pretendard",
+                "ui-sans-serif",
+                "system-ui",
+                "Apple SD Gothic Neo",
+                "sans-serif",
+              ],
+            },
+          },
+        },
+      };
+    </script>
+  </head>
+
+  <body class="min-h-screen bg-slate-50 text-slate-800 antialiased">
+    <!--
+      로고용 SVG 필터: 검정 배경(JPEG)을 투명하게 만들기.
+      alpha = R + G + B 로 매핑하므로 검정(0,0,0) → 알파 0(완전 투명),
+      주황 등 밝은 픽셀 → 알파 1(완전 불투명) 이 됩니다.
+      흰 배경 컨테이너 위에 사용해야 의도한 룩이 나옵니다.
+    -->
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <defs>
+        <filter id="logo-drop-black" color-interpolation-filters="sRGB">
+          <feColorMatrix
+            type="matrix"
+            values="
+              1 0 0 0 0
+              0 1 0 0 0
+              0 0 1 0 0
+              1 1 1 0 0"
+          />
+        </filter>
+      </defs>
+    </svg>
+
+    <!-- ============== 로그인 화면 ============== -->
+    <div
+      id="login-screen"
+      class="hidden min-h-screen items-center justify-center bg-gradient-to-br from-emerald-50 via-slate-50 to-white p-4"
+    >
+      <div class="w-full max-w-md">
+        <div class="mb-6 flex flex-col items-center text-center">
+          <span
+            class="flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl bg-white shadow-lg ring-1 ring-slate-200"
+          >
+            <img
+              src="./assets/logo.jpg"
+              alt="하오팅 중국어 로고"
+              class="h-[88%] w-[88%] object-contain"
+              style="filter: url(#logo-drop-black)"
+            />
+          </span>
+          <h1 class="mt-4 text-xl font-semibold text-slate-900">하오팅 중국어 관리자</h1>
+          <p class="mt-1 text-sm text-slate-500">선생님 계정으로 로그인해 주세요</p>
+        </div>
+
+        <form
+          id="login-form"
+          class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
+          autocomplete="on"
+          novalidate
+        >
+          <div class="space-y-4">
+            <div>
+              <label for="login-username" class="form-label">아이디</label>
+              <div class="relative">
+                <i
+                  class="fa-solid fa-user pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                ></i>
+                <input
+                  id="login-username"
+                  name="username"
+                  type="text"
+                  autocomplete="username"
+                  required
+                  class="form-input pl-9"
+                  placeholder="admin1"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label for="login-password" class="form-label">비밀번호</label>
+              <div class="relative">
+                <i
+                  class="fa-solid fa-lock pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                ></i>
+                <input
+                  id="login-password"
+                  name="password"
+                  type="password"
+                  autocomplete="current-password"
+                  required
+                  class="form-input pl-9 pr-10"
+                  placeholder="••••••••"
+                />
+                <button
+                  type="button"
+                  id="login-password-toggle"
+                  class="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                  aria-label="비밀번호 표시 전환"
+                >
+                  <i class="fa-solid fa-eye"></i>
+                </button>
+              </div>
+            </div>
+
+            <div
+              id="login-error"
+              class="hidden rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+            ></div>
+          </div>
+
+          <button
+            type="submit"
+            class="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2"
+          >
+            <i class="fa-solid fa-arrow-right-to-bracket"></i>
+            로그인
+          </button>
+        </form>
+
+        <details class="mt-4 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs text-slate-600">
+          <summary class="cursor-pointer font-medium text-slate-700">
+            <i class="fa-solid fa-circle-info mr-1 text-slate-400"></i>
+            테스트 계정 안내
+          </summary>
+          <div class="mt-3 space-y-2 leading-relaxed">
+            <p>
+              <span class="font-semibold text-slate-800">박환희 선생님</span>
+              · ID
+              <code class="rounded bg-slate-100 px-1.5 py-0.5">admin1</code>
+              / PW
+              <code class="rounded bg-slate-100 px-1.5 py-0.5">haoting1234</code>
+            </p>
+            <p>
+              <span class="font-semibold text-slate-800">김정화 선생님</span>
+              · ID
+              <code class="rounded bg-slate-100 px-1.5 py-0.5">admin2</code>
+              / PW
+              <code class="rounded bg-slate-100 px-1.5 py-0.5">haoting1234</code>
+            </p>
+            <p class="mt-2 text-[11px] text-slate-400">
+              ※ 본 시스템은 백엔드 없이 동작하므로 진정한 의미의 보안 인증을 제공하지 않습니다.
+              내부 사용 용도로만 활용해 주세요.
+            </p>
+          </div>
+        </details>
+
+        <p class="mt-6 text-center text-[11px] text-slate-400">
+          © 하오팅 중국어 · 모든 데이터는 브라우저에만 저장됩니다.
+        </p>
+      </div>
+    </div>
+
+    <!-- ============== 메인 앱 셸 ============== -->
+    <div id="app-shell" class="hidden min-h-screen">
+      <!-- ============== 좌측 사이드바 ============== -->
+      <aside
+        id="sidebar"
+        class="hidden w-64 shrink-0 flex-col border-r border-slate-200 bg-white md:flex"
+      >
+        <div class="flex h-16 items-center gap-2.5 border-b border-slate-200 px-6">
+          <img
+            src="./assets/logo.jpg"
+            alt="하오팅 중국어 로고"
+            class="h-9 w-9 object-contain"
+            style="filter: url(#logo-drop-black)"
+          />
+          <div class="flex-1 leading-tight">
+            <p class="text-sm font-semibold text-slate-900">하오팅 중국어</p>
+            <p class="text-[11px] text-slate-500">관리자 콘솔</p>
+          </div>
+          <button
+            type="button"
+            id="mobile-menu-close"
+            class="rounded-md p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 md:hidden"
+            aria-label="메뉴 닫기"
+          >
+            <i class="fa-solid fa-xmark text-lg"></i>
+          </button>
+        </div>
+
+        <nav class="flex-1 space-y-1 px-3 py-5" id="nav-menu">
+          <button
+            type="button"
+            data-route="students"
+            class="nav-item group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+          >
+            <i class="fa-solid fa-users w-5 text-center text-slate-400 group-[.active]:text-brand-600"></i>
+            <span>학생 관리</span>
+          </button>
+          <button
+            type="button"
+            data-route="sales"
+            class="nav-item group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+          >
+            <i class="fa-solid fa-chart-line w-5 text-center text-slate-400 group-[.active]:text-brand-600"></i>
+            <span>매출 관리</span>
+          </button>
+        </nav>
+
+        <div class="border-t border-slate-200 p-4">
+          <div class="flex items-center gap-3">
+            <div
+              id="sidebar-user-avatar"
+              class="flex h-9 w-9 items-center justify-center rounded-full bg-brand-100 text-sm font-semibold text-brand-700"
+            >
+              <i class="fa-solid fa-user"></i>
+            </div>
+            <div class="min-w-0 flex-1 text-sm leading-tight">
+              <p id="sidebar-user-name" class="truncate font-semibold text-slate-900">선생님</p>
+              <p id="sidebar-user-email" class="truncate text-xs text-slate-500">-</p>
+            </div>
+            <button
+              type="button"
+              id="sidebar-logout-btn"
+              class="rounded-md p-2 text-slate-400 transition hover:bg-slate-100 hover:text-red-600"
+              aria-label="로그아웃"
+              title="로그아웃"
+            >
+              <i class="fa-solid fa-arrow-right-from-bracket"></i>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- 모바일에서 사이드바 열렸을 때 표시되는 백드롭 -->
+      <div
+        id="mobile-backdrop"
+        class="md:hidden"
+        aria-hidden="true"
+      ></div>
+
+      <!-- ============== 메인 영역 ============== -->
+      <div class="flex min-w-0 flex-1 flex-col">
+        <!-- 상단 헤더 -->
+        <header
+          class="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-slate-200 bg-white/90 px-4 backdrop-blur md:px-8"
+        >
+          <div class="flex items-center gap-3">
+            <button
+              type="button"
+              id="mobile-menu-toggle"
+              class="rounded-md p-2 text-slate-500 hover:bg-slate-100 md:hidden"
+              aria-label="메뉴 열기"
+            >
+              <i class="fa-solid fa-bars"></i>
+            </button>
+            <h1 class="text-base font-semibold text-slate-900 md:text-lg">
+              하오팅 중국어 관리자 시스템
+            </h1>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <span id="header-date" class="hidden text-xs text-slate-500 sm:inline"></span>
+            <span
+              id="header-user-chip"
+              class="hidden items-center gap-2 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 sm:inline-flex"
+            >
+              <span
+                id="header-user-avatar"
+                class="flex h-5 w-5 items-center justify-center rounded-full bg-brand-100 text-[10px] font-semibold text-brand-700"
+              >
+                ?
+              </span>
+              <span id="header-user-name">선생님</span>
+            </span>
+            <button
+              type="button"
+              id="header-logout-btn"
+              class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 hover:text-red-600"
+            >
+              <i class="fa-solid fa-arrow-right-from-bracket"></i>
+              <span class="hidden sm:inline">로그아웃</span>
+            </button>
+          </div>
+        </header>
+
+        <main id="main-view" class="flex-1 overflow-x-hidden p-4 md:p-8">
+          <!-- 라우팅된 화면이 여기에 주입됩니다. -->
+        </main>
+      </div>
+    </div>
+
+    <!-- ============== 학생 추가/수정 모달 ============== -->
+    <div
+      id="student-modal"
+      class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="student-modal-title"
+    >
+      <div
+        class="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+      >
+        <div class="flex items-start justify-between border-b border-slate-200 px-6 py-4">
+          <div>
+            <h2 id="student-modal-title" class="text-lg font-semibold text-slate-900">
+              학생 추가
+            </h2>
+            <p id="student-modal-subtitle" class="mt-0.5 text-sm text-slate-500">
+              모든 항목을 입력 후 저장 버튼을 눌러 주세요.
+            </p>
+          </div>
+          <button
+            type="button"
+            class="modal-close rounded-md p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+            aria-label="닫기"
+          >
+            <i class="fa-solid fa-xmark text-lg"></i>
+          </button>
+        </div>
+
+        <form id="student-form" class="flex flex-1 flex-col overflow-hidden">
+          <input type="hidden" name="id" />
+
+          <div class="grid flex-1 grid-cols-1 gap-x-5 gap-y-4 overflow-y-auto px-6 py-5 md:grid-cols-2">
+            <div class="md:col-span-2">
+              <p class="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                기본 정보
+              </p>
+            </div>
+
+            <div>
+              <label class="form-label" for="f-name">학생 이름<span class="req">*</span></label>
+              <input
+                id="f-name"
+                name="name"
+                type="text"
+                required
+                class="form-input"
+                placeholder="예) 김민서"
+              />
+            </div>
+
+            <div>
+              <label class="form-label" for="f-instructor">담당 강사<span class="req">*</span></label>
+              <select id="f-instructor" name="assignedInstructor" required class="form-input">
+                <option value="" disabled selected>강사를 선택하세요</option>
+                <option value="박환희">박환희</option>
+                <option value="김정화">김정화</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="form-label" for="f-contact">연락처<span class="req">*</span></label>
+              <input
+                id="f-contact"
+                name="contact"
+                type="text"
+                required
+                class="form-input"
+                placeholder="010-1234-5678"
+              />
+            </div>
+
+            <div>
+              <label class="form-label" for="f-region">지역</label>
+              <input
+                id="f-region"
+                name="region"
+                type="text"
+                class="form-input"
+                placeholder="예) 서울 강남구"
+              />
+            </div>
+
+            <div>
+              <label class="form-label" for="f-location">수업장소</label>
+              <input
+                id="f-location"
+                name="location"
+                type="text"
+                class="form-input"
+                placeholder="예) 강남 본원 302호 / 온라인 (Zoom)"
+              />
+            </div>
+
+            <div>
+              <label class="form-label" for="f-inflow">유입 경로</label>
+              <input
+                id="f-inflow"
+                name="inflowChannel"
+                type="text"
+                class="form-input"
+                placeholder="예) 인스타그램 광고"
+              />
+            </div>
+
+            <div class="md:col-span-2">
+              <p class="mb-2 mt-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                수업 정보
+              </p>
+            </div>
+
+            <div>
+              <label class="form-label" for="f-curriculum">커리큘럼</label>
+              <input
+                id="f-curriculum"
+                name="curriculum"
+                type="text"
+                class="form-input"
+                placeholder="예) HSK 4급 종합반"
+              />
+            </div>
+
+            <div>
+              <label class="form-label" for="f-sessions">등록 횟수</label>
+              <input
+                id="f-sessions"
+                name="registeredSessions"
+                type="number"
+                min="0"
+                class="form-input"
+                placeholder="예) 20"
+              />
+            </div>
+
+            <div>
+              <label class="form-label" for="f-duration">수업 시간(분)</label>
+              <input
+                id="f-duration"
+                name="durationMinutes"
+                type="number"
+                min="0"
+                step="5"
+                class="form-input"
+                placeholder="예) 60"
+              />
+            </div>
+
+            <div>
+              <label class="form-label" for="f-fee">수업료 (원)</label>
+              <input
+                id="f-fee"
+                name="tuitionFee"
+                type="number"
+                min="0"
+                step="1000"
+                class="form-input"
+                placeholder="예) 720000"
+              />
+            </div>
+
+            <div>
+              <label class="form-label" for="f-reg-date">등록일</label>
+              <input id="f-reg-date" name="registrationDate" type="date" class="form-input" />
+            </div>
+
+            <div>
+              <label class="form-label" for="f-last-date">마지막 수강일</label>
+              <input id="f-last-date" name="lastClassDate" type="date" class="form-input" />
+            </div>
+
+            <div class="md:col-span-2">
+              <label class="form-label">
+                수업 요일
+                <span class="text-xs font-normal text-slate-400">(여러 개 선택 가능)</span>
+              </label>
+              <div id="f-schedule-days" class="flex flex-wrap gap-2">
+                <!-- 요일 체크박스는 JS 가 초기화 시 주입합니다. -->
+              </div>
+            </div>
+
+            <div class="md:col-span-2">
+              <label class="form-label" for="f-progress">진도</label>
+              <textarea
+                id="f-progress"
+                name="progress"
+                rows="2"
+                class="form-input"
+                placeholder="예) Lesson 8 / 12 진행 중. 발음 교정 단계."
+              ></textarea>
+            </div>
+
+            <div class="md:col-span-2">
+              <label class="form-label" for="f-homework">숙제 관리</label>
+              <textarea
+                id="f-homework"
+                name="homework"
+                rows="2"
+                class="form-input"
+                placeholder="예) Lesson 8 단어 50개 암기, 본문 낭독 녹음 제출"
+              ></textarea>
+            </div>
+
+            <div class="md:col-span-2">
+              <p class="mb-2 mt-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                상태 / 비고
+              </p>
+            </div>
+
+            <div class="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+              <input
+                id="f-active"
+                name="isActive"
+                type="checkbox"
+                class="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                checked
+              />
+              <label for="f-active" class="cursor-pointer text-sm font-medium text-slate-700">
+                현재 수강 중
+              </label>
+            </div>
+
+            <div>
+              <label class="form-label" for="f-leave">퇴원 사유</label>
+              <input
+                id="f-leave"
+                name="leaveReason"
+                type="text"
+                class="form-input"
+                placeholder="수강 중인 경우 비워 두세요."
+              />
+            </div>
+
+            <div class="md:col-span-2">
+              <label class="form-label" for="f-notes">비고</label>
+              <textarea
+                id="f-notes"
+                name="notes"
+                rows="3"
+                class="form-input"
+                placeholder="수업 시 참고할 내용을 자유롭게 적어 주세요."
+              ></textarea>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-6 py-4">
+            <button
+              type="button"
+              class="modal-close rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+            >
+              취소
+            </button>
+            <button
+              type="submit"
+              class="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700"
+            >
+              <i class="fa-solid fa-floppy-disk"></i>
+              <span id="student-form-submit-label">저장</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ============== 확인(삭제) 모달 ============== -->
+    <div
+      id="confirm-modal"
+      class="fixed inset-0 z-[60] hidden items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div class="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl">
+        <div class="flex items-start gap-3">
+          <span
+            class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-600"
+          >
+            <i class="fa-solid fa-triangle-exclamation"></i>
+          </span>
+          <div>
+            <h3 id="confirm-title" class="text-base font-semibold text-slate-900">
+              삭제하시겠습니까?
+            </h3>
+            <p id="confirm-message" class="mt-1 text-sm text-slate-500">
+              이 작업은 되돌릴 수 없습니다.
+            </p>
+          </div>
+        </div>
+        <div class="mt-5 flex justify-end gap-2">
+          <button
+            id="confirm-cancel"
+            type="button"
+            class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+          >
+            취소
+          </button>
+          <button
+            id="confirm-ok"
+            type="button"
+            class="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-red-700"
+          >
+            삭제
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============== 토스트 ============== -->
+    <div
+      id="toast"
+      class="pointer-events-none fixed bottom-6 left-1/2 z-[70] hidden -translate-x-1/2 rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-lg"
+    ></div>
+
+    <!-- ============== Firebase 미설정 안내 배너 ============== -->
+    <div
+      id="firebase-config-banner"
+      class="fixed inset-0 z-[80] hidden items-center justify-center bg-slate-900/80 p-4 backdrop-blur-sm"
+      role="alert"
+      aria-live="assertive"
+    >
+      <div class="w-full max-w-lg rounded-2xl border border-amber-200 bg-white p-6 shadow-2xl">
+        <div class="flex items-start gap-3">
+          <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600">
+            <i class="fa-solid fa-database"></i>
+          </span>
+          <div class="min-w-0 flex-1">
+            <h2 class="text-base font-semibold text-slate-900">
+              Firebase 설정이 필요합니다
+            </h2>
+            <p
+              id="firebase-config-banner-message"
+              class="mt-1 text-sm text-slate-600"
+            >
+              데이터베이스 연결을 사용할 수 없어 학생 데이터를 불러올 수 없습니다.
+            </p>
+            <ol class="mt-3 list-decimal space-y-1 pl-5 text-xs leading-relaxed text-slate-600">
+              <li>
+                <a
+                  href="https://console.firebase.google.com"
+                  target="_blank"
+                  rel="noreferrer"
+                  class="text-brand-700 underline hover:text-brand-800"
+                  >Firebase 콘솔</a
+                >에서 프로젝트를 만들고 웹앱을 등록합니다.
+              </li>
+              <li>
+                좌측 메뉴 <code class="rounded bg-slate-100 px-1">Build → Firestore Database</code>
+                에서 데이터베이스를 생성합니다 (위치: <em>asia-northeast3</em> 권장).
+              </li>
+              <li>
+                받은 설정 객체를 프로젝트의 <code class="rounded bg-slate-100 px-1">firebase-config.js</code>
+                안의 <code class="rounded bg-slate-100 px-1">YOUR_*</code> 자리에 붙여넣고 저장합니다.
+              </li>
+              <li>이 페이지를 새로고침합니다.</li>
+            </ol>
+            <p class="mt-3 text-[11px] text-slate-400">
+              자세한 보안 규칙·운영 가이드는 README.md 의 "Firebase 연동 설정" 섹션을 참고하세요.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============== 데이터 레이어: Firebase ============== -->
+    <!--
+      ⚠️ 로딩 순서 주의:
+      1) firebase-config.js : 동기 스크립트(즉시 평가) → window.HAOTING_FIREBASE_CONFIG 정의
+      2) firebase.js (module): 위 설정을 읽어 SDK 초기화 후 window.HaotingDB 노출
+      3) app.js (defer)      : window.HaotingDB 를 통해 데이터를 다룹니다.
+      defer / module 모두 문서 순서대로 실행되므로 위 순서가 보장됩니다.
+    -->
+    <script src="./firebase-config.js"></script>
+    <script type="module" src="./firebase.js"></script>
+    <script src="./app.js" defer></script>
+  </body>
+</html>
