@@ -346,7 +346,7 @@
       aria-labelledby="student-modal-title"
     >
       <div
-        class="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+        class="flex max-h-[90vh] min-h-0 w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
       >
         <div class="flex items-start justify-between border-b border-slate-200 px-6 py-4">
           <div>
@@ -367,10 +367,11 @@
         </div>
 
         <!-- novalidate: 브라우저 내장 검증이 submit 자체를 막아 저장이 안 되는 경우를 방지합니다. 검증은 app.js 에서 처리합니다. -->
-        <form id="student-form" class="flex flex-1 flex-col overflow-hidden" novalidate>
+        <form id="student-form" class="flex min-h-0 flex-1 flex-col overflow-hidden" novalidate>
           <input type="hidden" name="id" />
 
-          <div class="grid flex-1 grid-cols-1 gap-x-5 gap-y-4 overflow-y-auto px-6 py-5 md:grid-cols-2">
+          <!-- min-h-0: flex 자식의 기본 min-height:auto 가 스크롤 영역을 밀어내려 저장 버튼이 가려지는 문제 방지 -->
+          <div class="grid min-h-0 flex-1 grid-cols-1 gap-x-5 gap-y-4 overflow-y-auto px-6 py-5 md:grid-cols-2">
             <div class="md:col-span-2">
               <p class="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
                 기본 정보
@@ -594,15 +595,19 @@
             </div>
           </div>
 
-          <div class="flex items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-6 py-4">
+          <div
+            class="relative z-10 flex shrink-0 items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-6 py-4"
+          >
             <button
               type="button"
               class="modal-close rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
             >
               취소
             </button>
+            <!-- type=button + JS: 일부 환경에서 flex/overflow 조합으로 submit 이 기대대로 동작하지 않는 경우 대비 -->
             <button
-              type="submit"
+              type="button"
+              id="student-form-submit"
               class="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700"
             >
               <i class="fa-solid fa-floppy-disk"></i>

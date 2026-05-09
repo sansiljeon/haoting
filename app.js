@@ -1514,8 +1514,8 @@
       draft.contact = normalizeKoreanMobileContact(draft.contact);
     }
 
-    // 저장 버튼 중복 클릭 방지
-    const submitBtn = form.querySelector('button[type="submit"]');
+    // 저장 버튼 중복 클릭 방지 (#student-form-submit 은 type=button)
+    const submitBtn = document.getElementById("student-form-submit");
     if (submitBtn) submitBtn.disabled = true;
 
     try {
@@ -1804,9 +1804,15 @@
     });
 
     // 학생 폼 제출
-    const form = document.getElementById("student-form");
-    if (form) {
-      form.addEventListener("submit", handleStudentFormSubmit);
+    const studentForm = document.getElementById("student-form");
+    if (studentForm) {
+      studentForm.addEventListener("submit", handleStudentFormSubmit);
+      document.getElementById("student-form-submit")?.addEventListener("click", () =>
+        handleStudentFormSubmit({
+          preventDefault() {},
+          currentTarget: studentForm,
+        })
+      );
     }
 
     const contactInput = document.getElementById("f-contact");
