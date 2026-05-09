@@ -24,10 +24,11 @@
  * - 실제 보안은 Firestore 규칙(rules)에서 결정됩니다.
  * ============================================================ */
 window.HAOTING_FIREBASE_CONFIG = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-  appId: "YOUR_APP_ID",
+  apiKey: "AIzaSyDjKE1hkE1IiaZ6dQP6D4rbQLoNERaWhAM",
+  authDomain: "haoting-aadee.firebaseapp.com",
+  projectId: "haoting-aadee",
+  storageBucket: "haoting-aadee.firebasestorage.app",
+  messagingSenderId: "693666441064",
+  appId: "1:693666441064:web:8c65a32b681645737f98dd",
+  measurementId: "G-XS88K64833"
 };
