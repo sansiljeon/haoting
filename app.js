@@ -19,6 +19,26 @@
   // 하오팅 중국어의 두 분 강사 (단일 출처). 학생 폼 select 옵션과 동기화됩니다.
   const INSTRUCTORS = ["박환희", "김정화"];
 
+  /** 수업 요일 칩 순서 및 저장 시 요일 배열 정렬에 사용 (월 시작). 유동 단독 선택은 따로 처리합니다. */
+  const SCHEDULE_DAY_DISPLAY_ORDER = ["월", "화", "수", "목", "금", "토", "일"];
+  /** 커리큘럼 select 옵션 값 (index.html 의 option value 와 동기화). */
+  const CURRICULUM_OPTIONS = [
+    "유아",
+    "초1,2",
+    "초3,4",
+    "초5,6",
+    "기초 중국어",
+    "회화 입문",
+    "회화 초급",
+    "회화 중급",
+    "회화 고급",
+    "HSK 3급",
+    "HSK 4급",
+    "HSK 5급",
+    "HSK 6급",
+  ];
+  const SCHEDULE_FLEXIBLE_DAY = "유동";
+
   // 하오팅 중국어 선생님 계정 (백엔드가 없으므로 코드에 하드코딩).
   // 실서비스 인증이 아닌 "내부용 소프트 게이트" 입니다.
   const ACCOUNTS = [
@@ -331,6 +351,22 @@
     return `${yyyy}-${mm}-${dd}`;
   }
 
+  /** 입력 중이거나 블러 시에도 010- 로 시작하면 하이픈을 끼워 넣습니다 (11자 완성 시 최종 형식). */
+  function formatContactAsTyping(raw) {
+    const d = String(raw || "").replace(/\D/g, "").slice(0, 11);
+    if (!d.startsWith("010")) return d;
+    if (d.length <= 3) return d;
+    if (d.length <= 7) return `${d.slice(0, 3)}-${d.slice(3)}`;
+    return `${d.slice(0, 3)}-${d.slice(3, 7)}-${d.slice(7)}`;
+  }
+
+  /** 010 휴대폰: 010-xxxx-xxxx 로 정규화 (미완성이면 진행 형태 유지). 그 외는 숫자만 정리합니다. */
+  function normalizeKoreanMobileContact(raw) {
+    const d = String(raw || "").replace(/\D/g, "");
+    if (d.startsWith("010")) return formatContactAsTyping(d);
+    return d || String(raw || "").trim();
+  }
+
   function getTodayWeekdayKor() {
     return WEEKDAYS[new Date().getDay()];
   }
@@ -426,10 +462,14 @@
 
     // 오늘 수업 일정: 활동 중인 학생 중 수업 요일에 오늘이 포함된 학생들
     const todayWeekday = getTodayWeekdayKor();
-    const todayClasses = state.students.filter(
-      (s) =>
-        s.isActive && Array.isArray(s.scheduleDays) && s.scheduleDays.includes(todayWeekday)
-    );
+    const todayClasses = state.students.filter((s) => {
+      if (!s.isActive || !Array.isArray(s.scheduleDays) || s.scheduleDays.length === 0) return false;
+      const onlyFlexible =
+        s.scheduleDays.length === 1 &&
+        String(s.scheduleDays[0]).trim() === SCHEDULE_FLEXIBLE_DAY;
+      if (onlyFlexible) return false;
+      return s.scheduleDays.includes(todayWeekday);
+    });
 
     // 이번달 재등록이 필요한 학생: 활동 중이며, 등록 회차의 예상 소진일이 이번달 말까지인 학생.
     // (이미 예상 종료일이 지났더라도 활동 중이면 더 시급하므로 포함)
@@ -1260,8 +1300,10 @@
     form.elements.isActive.checked = true;
     setScheduleDaysOnForm(form, []);
     cleanInstructorLegacyOption(form);
+    cleanCurriculumLegacyOption(form);
     // form.reset() 후에는 disabled placeholder 가 다시 selected 가 되어 value 가 "" 으로 돌아갑니다.
     form.elements.assignedInstructor.value = "";
+    form.elements.curriculum.value = "";
   }
 
   function fillFormFromStudent(form, s) {
@@ -1273,6 +1315,7 @@
     form.elements.region.value = s.region || "";
     form.elements.location.value = s.location || "";
     form.elements.inflowChannel.value = s.inflowChannel || "";
+    ensureCurriculumOption(form, s.curriculum);
     form.elements.curriculum.value = s.curriculum || "";
     form.elements.registeredSessions.value = s.registeredSessions ?? "";
     form.elements.durationMinutes.value = s.durationMinutes ?? "";
@@ -1295,9 +1338,10 @@
       const n = Number(raw);
       return Number.isFinite(n) ? n : 0;
     };
-    // 체크된 요일을 WEEKDAYS 순서로 정렬해서 저장 (월,화,수... 일관성 유지)
     const checkedDays = fd.getAll("scheduleDays").map(String);
-    const orderedDays = WEEKDAYS.filter((d) => checkedDays.includes(d));
+    const orderedDays = checkedDays.includes(SCHEDULE_FLEXIBLE_DAY)
+      ? [SCHEDULE_FLEXIBLE_DAY]
+      : SCHEDULE_DAY_DISPLAY_ORDER.filter((d) => checkedDays.includes(d));
     return {
       name: String(fd.get("name") || "").trim(),
       assignedInstructor: String(fd.get("assignedInstructor") || "").trim(),
@@ -1320,17 +1364,33 @@
     };
   }
 
-  // 요일 체크박스를 학생 모달 폼 안에 초기화합니다 (한 번만).
+  // 요일·유동 칩을 학생 모달 폼 안에 초기화합니다 (한 번만).
+  function wireScheduleFlexibleExclusive(container) {
+    if (!container || container.dataset.exclusionWired === "true") return;
+    container.dataset.exclusionWired = "true";
+
+    container.addEventListener("change", (e) => {
+      const target = e.target;
+      if (!target || target.name !== "scheduleDays") return;
+      const checkboxes = Array.from(container.querySelectorAll('input[type="checkbox"][name="scheduleDays"]'));
+      if (target.value === SCHEDULE_FLEXIBLE_DAY && target.checked) {
+        checkboxes.forEach((cb) => {
+          if (cb !== target) cb.checked = false;
+        });
+      } else if (target.value !== SCHEDULE_FLEXIBLE_DAY && target.checked) {
+        const flex = checkboxes.find((cb) => cb.value === SCHEDULE_FLEXIBLE_DAY);
+        if (flex) flex.checked = false;
+      }
+    });
+  }
+
   function ensureScheduleDayChips() {
     const container = document.getElementById("f-schedule-days");
     if (!container || container.dataset.initialized === "true") return;
     container.dataset.initialized = "true";
 
-    // 월~일 순으로 보여주되 (한국 요일 관례), 값은 그대로 사용합니다.
-    const display = ["월", "화", "수", "목", "금", "토", "일"];
-    container.innerHTML = display
-      .map(
-        (d) => `
+    const weekdayHtml = SCHEDULE_DAY_DISPLAY_ORDER.map(
+      (d) => `
           <label
             class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
           >
@@ -1343,8 +1403,23 @@
             <span>${d}</span>
           </label>
         `
-      )
-      .join("");
+    ).join("");
+    const flexChip = `
+          <label
+            class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-sm font-medium text-amber-900 transition hover:bg-amber-100"
+          >
+            <input
+              type="checkbox"
+              name="scheduleDays"
+              value="${SCHEDULE_FLEXIBLE_DAY}"
+              class="h-4 w-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+            />
+            <span>${SCHEDULE_FLEXIBLE_DAY}</span>
+          </label>
+        `;
+    container.innerHTML = weekdayHtml + flexChip;
+
+    wireScheduleFlexibleExclusive(container);
   }
 
   function setScheduleDaysOnForm(form, days) {
@@ -1379,9 +1454,44 @@
     });
   }
 
+  // 커리큘럼이 현재 옵션에 없는 과거 문자열 값이더라도 편집 시 선택 가능하도록 임시 옵션을 붙입니다.
+  function ensureCurriculumOption(form, value) {
+    const select = form.elements.curriculum;
+    if (!select || !value) return;
+    if (CURRICULUM_OPTIONS.includes(value)) return;
+    const exists = Array.from(select.options).some((o) => o.value === value);
+    if (exists) return;
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = `${value} (기존)`;
+    opt.dataset.legacy = "true";
+    select.appendChild(opt);
+  }
+
+  function cleanCurriculumLegacyOption(form) {
+    const select = form.elements.curriculum;
+    if (!select) return;
+    Array.from(select.options).forEach((opt) => {
+      if (opt.dataset && opt.dataset.legacy === "true") opt.remove();
+    });
+  }
+
   async function handleStudentFormSubmit(e) {
     e.preventDefault();
     const form = e.currentTarget;
+
+    if (!isDBReady()) {
+      const detail =
+        window.HaotingDB && typeof window.HaotingDB.configError === "function"
+          ? window.HaotingDB.configError()
+          : "Firebase Firestore 에 연결할 수 없습니다.";
+      showToast(detail || "저장 환경을 확인해 주세요.");
+      return;
+    }
+
+    const contactInput = form.elements.contact;
+    if (contactInput) contactInput.value = normalizeKoreanMobileContact(contactInput.value);
+
     const draft = readDraftFromForm(form);
 
     if (!draft.name) {
@@ -1398,6 +1508,10 @@
       showToast("연락처를 입력해 주세요.");
       form.elements.contact.focus();
       return;
+    }
+    const contactDigits = draft.contact.replace(/\D/g, "");
+    if (contactDigits.length === 11 && contactDigits.startsWith("010")) {
+      draft.contact = normalizeKoreanMobileContact(draft.contact);
     }
 
     // 저장 버튼 중복 클릭 방지
@@ -1693,6 +1807,16 @@
     const form = document.getElementById("student-form");
     if (form) {
       form.addEventListener("submit", handleStudentFormSubmit);
+    }
+
+    const contactInput = document.getElementById("f-contact");
+    if (contactInput) {
+      contactInput.addEventListener("input", () => {
+        contactInput.value = contactInput.value.replace(/\D/g, "").slice(0, 11);
+      });
+      contactInput.addEventListener("blur", () => {
+        contactInput.value = normalizeKoreanMobileContact(contactInput.value);
+      });
     }
 
     // 헤더 우측 날짜

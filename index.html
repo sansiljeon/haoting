@@ -366,7 +366,8 @@
           </button>
         </div>
 
-        <form id="student-form" class="flex flex-1 flex-col overflow-hidden">
+        <!-- novalidate: 브라우저 내장 검증이 submit 자체를 막아 저장이 안 되는 경우를 방지합니다. 검증은 app.js 에서 처리합니다. -->
+        <form id="student-form" class="flex flex-1 flex-col overflow-hidden" novalidate>
           <input type="hidden" name="id" />
 
           <div class="grid flex-1 grid-cols-1 gap-x-5 gap-y-4 overflow-y-auto px-6 py-5 md:grid-cols-2">
@@ -402,7 +403,10 @@
               <input
                 id="f-contact"
                 name="contact"
-                type="text"
+                type="tel"
+                inputmode="numeric"
+                autocomplete="tel-national"
+                maxlength="13"
                 required
                 class="form-input"
                 placeholder="010-1234-5678"
@@ -450,13 +454,22 @@
 
             <div>
               <label class="form-label" for="f-curriculum">커리큘럼</label>
-              <input
-                id="f-curriculum"
-                name="curriculum"
-                type="text"
-                class="form-input"
-                placeholder="예) HSK 4급 종합반"
-              />
+              <select id="f-curriculum" name="curriculum" class="form-input">
+                <option value="">커리큘럼 선택</option>
+                <option value="유아">유아</option>
+                <option value="초1,2">초1,2</option>
+                <option value="초3,4">초3,4</option>
+                <option value="초5,6">초5,6</option>
+                <option value="기초 중국어">기초 중국어</option>
+                <option value="회화 입문">회화 입문</option>
+                <option value="회화 초급">회화 초급</option>
+                <option value="회화 중급">회화 중급</option>
+                <option value="회화 고급">회화 고급</option>
+                <option value="HSK 3급">HSK 3급</option>
+                <option value="HSK 4급">HSK 4급</option>
+                <option value="HSK 5급">HSK 5급</option>
+                <option value="HSK 6급">HSK 6급</option>
+              </select>
             </div>
 
             <div>
