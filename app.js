@@ -1478,7 +1478,6 @@
 
   async function handleStudentFormSubmit(e) {
     e.preventDefault();
-    console.log("[student-form] save clicked");
     const form = e.currentTarget;
 
     if (!isDBReady()) {
@@ -1519,6 +1518,8 @@
     const submitBtn = document.getElementById("student-form-submit");
     if (submitBtn) submitBtn.disabled = true;
 
+    const wasNewStudent = !state.editingId;
+
     try {
       if (state.editingId) {
         await updateStudent(state.editingId, draft);
@@ -1528,7 +1529,12 @@
         showToast("새 학생이 추가되었습니다.");
       }
       closeStudentModal();
-      // 화면은 Firestore onSnapshot 이 도착하면 자동으로 갱신됩니다.
+      if (wasNewStudent) {
+        navigate("students");
+        window.location.reload();
+        return;
+      }
+      // 수정 저장: onSnapshot 으로 목록이 갱신됩니다.
     } catch (err) {
       console.error("[handleStudentFormSubmit]", err);
       showToast("저장에 실패했습니다. 네트워크와 Firebase 설정을 확인해 주세요.");
@@ -1934,8 +1940,12 @@
       showFirebaseConfigBanner();
       return;
     }
-    await seedFirestoreOnce();
+    // 시드(seed)가 끝날 때까지 기다린 뒤 구독하면 첫 화면이 늦어집니다.
+    // onSnapshot 을 먼저 걸어 첫 스냅샷으로 UI를 바로 풀고, 시드는 병렬로 진행합니다.
     subscribeToStudents();
+    seedFirestoreOnce().catch((err) => {
+      console.error("[seedFirestoreOnce]", err);
+    });
   }
 
   function showFirebaseConfigBanner() {
