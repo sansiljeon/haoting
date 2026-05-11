@@ -1478,6 +1478,7 @@
 
   async function handleStudentFormSubmit(e) {
     e.preventDefault();
+    console.log("[student-form] save clicked");
     const form = e.currentTarget;
 
     if (!isDBReady()) {
