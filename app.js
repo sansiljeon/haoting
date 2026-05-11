@@ -1518,23 +1518,17 @@
     const submitBtn = document.getElementById("student-form-submit");
     if (submitBtn) submitBtn.disabled = true;
 
-    const wasNewStudent = !state.editingId;
-
     try {
       if (state.editingId) {
         await updateStudent(state.editingId, draft);
+        closeStudentModal();
         showToast("학생 정보가 수정되었습니다.");
       } else {
         await createStudent(draft);
+        closeStudentModal();
         showToast("새 학생이 추가되었습니다.");
       }
-      closeStudentModal();
-      if (wasNewStudent) {
-        navigate("students");
-        window.location.reload();
-        return;
-      }
-      // 수정 저장: onSnapshot 으로 목록이 갱신됩니다.
+      navigate("students");
     } catch (err) {
       console.error("[handleStudentFormSubmit]", err);
       showToast("저장에 실패했습니다. 네트워크와 Firebase 설정을 확인해 주세요.");
