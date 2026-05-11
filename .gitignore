@@ -1,0 +1,19 @@
+# OS / 에디터
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# 로컬 임시
+*.log
+.tmp/
+
+# Vercel
+.vercel
+
+# Firebase 설정 (옵션)
+# 기본적으로 firebase-config.js 는 커밋해도 됩니다 — apiKey 등은 공개 식별자이며,
+# 실제 보안은 Firestore 규칙에서 결정됩니다.
+# 만약 본인 프로젝트 식별자를 공개 저장소에 절대 노출하고 싶지 않다면, 아래 줄의
+# 주석을 풀어 로컬 전용 파일(firebase-config.local.js) 로 옮기는 패턴을 사용하세요.
+# firebase-config.local.js
