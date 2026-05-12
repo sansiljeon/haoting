@@ -2,15 +2,15 @@
 
 중국어 교습소 **하오팅 중국어** 의 선생님들을 위한 학생·매출 관리 웹앱입니다.
 
-빌드 도구 없이 **순수 HTML / CSS / Vanilla JavaScript** 만으로 동작하며, 학생 데이터는 **Firebase Firestore** 에 저장되어 PC·모바일·여러 선생님 사이에 **실시간으로 공유**됩니다. 그대로 **Vercel 정적 호스팅** 에 올릴 수 있습니다.
+**HTML / CSS / Vanilla JavaScript** 로 동작하며, 학생 데이터는 **Firebase Firestore** 에 저장되어 PC·모바일·여러 선생님 사이에 **실시간으로 공유**됩니다. **Vercel** 에 올리면 배포 시 `npm run build` 로 Tailwind CSS 가 생성됩니다.
 
 ## 기술 스택
 
 - HTML5 (단일 `index.html` 기반 SPA)
-- [Tailwind CSS](https://tailwindcss.com/) (CDN)
+- [Tailwind CSS](https://tailwindcss.com/) v3 (로컬 빌드 → `tailwind.css`, 마크업·`app.js` 변경 후 `npm run build:css` 로 재생성)
 - [Font Awesome 6](https://fontawesome.com/) 아이콘 (CDN)
 - [Pretendard](https://github.com/orioncactus/pretendard) 한글 폰트 (CDN)
-- 순수 JavaScript (모듈/번들러 미사용)
+- 순수 JavaScript (`app.js` 번들 없음); `firebase.js` 만 ES 모듈
 - 데이터: **Firebase Firestore** (실시간 동기화)
 - 로그인 세션: `localStorage` (기기별)
 
@@ -22,10 +22,22 @@
 ├── app.js                # 라우팅, 렌더링, 이벤트 핸들러 등 전 로직
 ├── firebase.js           # Firestore 어댑터 (window.HaotingDB) — ESM 모듈
 ├── firebase-config.js    # Firebase 프로젝트 설정값 (직접 채워 넣기)
+├── tailwind.css          # Tailwind 빌드 산출물 (저장소에 포함, 로컬에서 `npm run build:css` 로 갱신)
+├── src/tailwind-input.css
+├── tailwind.config.js
+├── package.json          # `npm run build` (= build:css) — Vercel 배포 시 자동 실행
 ├── styles.css            # 폼 입력, 토글, 테이블 등 커스텀 스타일
 ├── vercel.json           # Vercel 정적 배포용 설정 (선택)
 └── README.md
 ```
+
+## 로컬 시작 체크리스트
+
+1. **Node.js** 설치 후 프로젝트 루트에서 `npm install` 실행  
+2. **Tailwind**: `npm run build:css` 한 번 실행(또는 개발 중 `npm run watch:css`). 저장소에 포함된 `tailwind.css`가 있으면 생략 가능하나, 클래스를 바꾼 뒤에는 반드시 재빌드  
+3. **로컬 서버**로 열기 (예: `python3 -m http.server 8080` 후 `http://localhost:8080`) — `file://` 은 ES 모듈 때문에 비권장  
+4. **Firebase**: `firebase-config.js`에 웹앱 설정값이 채워져 있고, Firestore·규칙이 README 대로 준비되어 있는지 확인  
+5. **Vercel 배포**: 저장소 연결 시 `npm run build`가 실행되며(`vercel.json`의 `buildCommand`), `tailwind.css`가 갱신됩니다
 
 ## 주요 기능
 

@@ -1271,11 +1271,12 @@
       fillFormFromStudent(form, s);
     } else {
       titleEl.textContent = "학생 추가";
-      subtitleEl.textContent = "모든 항목을 입력 후 저장 버튼을 눌러 주세요.";
+      subtitleEl.textContent = "이름·담당 강사·연락처(*)는 필수입니다. 입력 후 저장을 눌러 주세요.";
       submitLabel.textContent = "저장";
       resetForm(form);
     }
 
+    modal.style.removeProperty("display");
     modal.classList.remove("hidden");
     modal.classList.add("modal-open");
     document.body.style.overflow = "hidden";
@@ -1290,6 +1291,8 @@
     if (!modal) return;
     modal.classList.remove("modal-open");
     modal.classList.add("hidden");
+    // 일부 환경에서 class 만으로 display 가 남는 경우를 막기 위해 강제로 숨깁니다.
+    modal.style.setProperty("display", "none", "important");
     document.body.style.overflow = "";
     state.editingId = null;
   }
@@ -1330,6 +1333,25 @@
     form.elements.leaveReason.value = s.leaveReason || "";
     form.elements.notes.value = s.notes || "";
     setScheduleDaysOnForm(form, Array.isArray(s.scheduleDays) ? s.scheduleDays : []);
+  }
+
+  /** 학생 폼의 필수(*) 항목: 이름, 담당 강사, 연락처 */
+  function validateStudentFormRequired(form, draft) {
+    const missingLabels = [];
+    if (!draft.name) missingLabels.push("학생 이름");
+    if (!draft.assignedInstructor) missingLabels.push("담당 강사");
+    if (!draft.contact) missingLabels.push("연락처");
+    if (missingLabels.length === 0) return true;
+
+    showToast(`필수 항목을 입력해 주세요: ${missingLabels.join(", ")}`);
+    if (!draft.name) {
+      form.elements.name?.focus();
+    } else if (!draft.assignedInstructor) {
+      form.elements.assignedInstructor?.focus();
+    } else {
+      form.elements.contact?.focus();
+    }
+    return false;
   }
 
   function readDraftFromForm(form) {
@@ -1496,19 +1518,7 @@
 
     const draft = readDraftFromForm(form);
 
-    if (!draft.name) {
-      showToast("학생 이름을 입력해 주세요.");
-      form.elements.name.focus();
-      return;
-    }
-    if (!draft.assignedInstructor) {
-      showToast("담당 강사를 선택해 주세요.");
-      form.elements.assignedInstructor.focus();
-      return;
-    }
-    if (!draft.contact) {
-      showToast("연락처를 입력해 주세요.");
-      form.elements.contact.focus();
+    if (!validateStudentFormRequired(form, draft)) {
       return;
     }
     const contactDigits = draft.contact.replace(/\D/g, "");
@@ -1520,16 +1530,19 @@
     const submitBtn = document.getElementById("student-form-submit");
     if (submitBtn) submitBtn.disabled = true;
 
+    const editingIdBeforeSave = state.editingId;
+
     try {
-      if (state.editingId) {
-        await updateStudent(state.editingId, draft);
-        showToast("학생 정보가 수정되었습니다.");
+      if (editingIdBeforeSave) {
+        await updateStudent(editingIdBeforeSave, draft);
       } else {
         await createStudent(draft);
-        showToast("새 학생이 추가되었습니다.");
       }
       closeStudentModal();
       navigate("students");
+      showToast(
+        editingIdBeforeSave ? "학생 정보가 수정되었습니다." : "새 학생이 추가되었습니다."
+      );
     } catch (err) {
       console.error("[handleStudentFormSubmit]", err);
       showToast("저장에 실패했습니다. 네트워크와 Firebase 설정을 확인해 주세요.");
@@ -1894,7 +1907,12 @@
     ensureScheduleDayChips();
     bindGlobalEvents();
     bindLoginEvents();
-    buildAndApplyFavicon();
+    // 파비콘 픽셀 가공은 첫 페인트 이후로 미루어 초기 로딩을 덜 막습니다.
+    if (typeof requestIdleCallback === "function") {
+      requestIdleCallback(() => buildAndApplyFavicon(), { timeout: 4000 });
+    } else {
+      setTimeout(buildAndApplyFavicon, 1);
+    }
 
     // 학생 데이터(Firestore) 는 SDK 모듈 로딩이 끝난 뒤에만 초기화 가능합니다.
     whenDBReady(initData);
@@ -1909,22 +1927,22 @@
   }
 
   // Firebase SDK 모듈(firebase.js) 이 window.HaotingDB 를 노출할 때까지 대기.
-  // 8 초 안에 준비되지 않으면 네트워크/CDN 문제로 간주하고 설정 안내 배너를 띄웁니다.
+  // 느린 네트워크에서는 모듈이 타임아웃 이후에 도착할 수 있으므로, db-ready 이벤트에서는
+  // 항상 다시 initData 를 시도합니다(이미 구독 중이면 subscribeToStudents 가 정리 후 재구독).
   function whenDBReady(callback) {
     if (window.HaotingDB) {
       callback();
       return;
     }
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
+    const onModule = () => {
+      if (!window.HaotingDB) return;
       callback();
     };
-    window.addEventListener("haoting:db-ready", finish, { once: true });
+    window.addEventListener("haoting:db-ready", onModule, { once: true });
     setTimeout(() => {
-      if (!window.HaotingDB) finish();
-    }, 8000);
+      if (window.HaotingDB) return;
+      callback();
+    }, 3000);
   }
 
   async function initData() {
@@ -1937,6 +1955,7 @@
     }
     // 시드(seed)가 끝날 때까지 기다린 뒤 구독하면 첫 화면이 늦어집니다.
     // onSnapshot 을 먼저 걸어 첫 스냅샷으로 UI를 바로 풀고, 시드는 병렬로 진행합니다.
+    hideFirebaseConfigBanner();
     subscribeToStudents();
     seedFirestoreOnce().catch((err) => {
       console.error("[seedFirestoreOnce]", err);
@@ -1958,6 +1977,13 @@
 
     banner.classList.remove("hidden");
     banner.classList.add("flex");
+  }
+
+  function hideFirebaseConfigBanner() {
+    const banner = document.getElementById("firebase-config-banner");
+    if (!banner) return;
+    banner.classList.add("hidden");
+    banner.classList.remove("flex");
   }
 
   if (document.readyState === "loading") {
