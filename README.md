@@ -2,7 +2,7 @@
 
 중국어 교습소 **하오팅 중국어** 의 선생님들을 위한 학생·매출 관리 웹앱입니다.
 
-**HTML / CSS / Vanilla JavaScript** 로 동작하며, 학생 데이터는 **Firebase Firestore** 에 저장되어 PC·모바일·여러 선생님 사이에 **실시간으로 공유**됩니다. **Vercel** 에 올리면 배포 시 `npm run build` 로 Tailwind CSS 가 생성됩니다.
+**HTML / CSS / Vanilla JavaScript** 로 동작하며, 학생 데이터는 **Firebase Firestore** 에 저장되어 PC·모바일·여러 선생님 사이에 **실시간으로 공유**됩니다. **로그인**은 **Firebase Authentication**(이메일·비밀번호)을 사용합니다. **Vercel** 배포 시 `npm run build` 로 Tailwind CSS(`tailwind.css`)가 생성됩니다.
 
 ## 기술 스택
 
@@ -12,7 +12,7 @@
 - [Pretendard](https://github.com/orioncactus/pretendard) 한글 폰트 (CDN)
 - 순수 JavaScript (`app.js` 번들 없음); `firebase.js` 만 ES 모듈
 - 데이터: **Firebase Firestore** (실시간 동기화)
-- 로그인 세션: `localStorage` (기기별)
+- 로그인: **Firebase Authentication** (이메일·비밀번호, 세션은 Firebase 가 브라우저에 유지)
 
 ## 디렉터리 구조
 
@@ -20,12 +20,12 @@
 .
 ├── index.html            # 마크업 + 사이드바 / 헤더 / 모달 템플릿
 ├── app.js                # 라우팅, 렌더링, 이벤트 핸들러 등 전 로직
-├── firebase.js           # Firestore 어댑터 (window.HaotingDB) — ESM 모듈
+├── firebase.js           # Firestore + Auth (window.HaotingDB) — ESM 모듈
 ├── firebase-config.js    # Firebase 프로젝트 설정값 (직접 채워 넣기)
 ├── tailwind.css          # Tailwind 빌드 산출물 (저장소에 포함, 로컬에서 `npm run build:css` 로 갱신)
 ├── src/tailwind-input.css
 ├── tailwind.config.js
-├── package.json          # `npm run build` (= build:css) — Vercel 배포 시 자동 실행
+├── package.json          # `npm run build` (= `build:css`) — Vercel 배포 시 실행
 ├── styles.css            # 폼 입력, 토글, 테이블 등 커스텀 스타일
 ├── vercel.json           # Vercel 정적 배포용 설정 (선택)
 └── README.md
@@ -34,10 +34,10 @@
 ## 로컬 시작 체크리스트
 
 1. **Node.js** 설치 후 프로젝트 루트에서 `npm install` 실행  
-2. **Tailwind**: `npm run build:css` 한 번 실행(또는 개발 중 `npm run watch:css`). 저장소에 포함된 `tailwind.css`가 있으면 생략 가능하나, 클래스를 바꾼 뒤에는 반드시 재빌드  
-3. **로컬 서버**로 열기 (예: `python3 -m http.server 8080` 후 `http://localhost:8080`) — `file://` 은 ES 모듈 때문에 비권장  
-4. **Firebase**: `firebase-config.js`에 웹앱 설정값이 채워져 있고, Firestore·규칙이 README 대로 준비되어 있는지 확인  
-5. **Vercel 배포**: 저장소 연결 시 `npm run build`가 실행되며(`vercel.json`의 `buildCommand`), `tailwind.css`가 갱신됩니다
+2. **Firebase**: `firebase-config.js` 채움, 콘솔에서 **Authentication → Sign-in method** 에서 **이메일/비밀번호** 사용 설정, 선생님용 **사용자 계정** 생성(이메일·비밀번호)  
+3. **Tailwind**: `npm run build:css` 한 번 실행(또는 개발 중 `npm run watch:css`). 클래스를 바꾼 뒤에는 재빌드  
+4. **로컬 서버**로 열기 (예: `python3 -m http.server 8080` 후 `http://localhost:8080`) — `file://` 은 ES 모듈 때문에 비권장  
+5. **Vercel 배포**: 저장소 연결 시 `npm run build`가 실행됩니다(`vercel.json`의 `buildCommand`).
 
 ## 주요 기능
 
@@ -169,7 +169,7 @@ service cloud.firestore {
 }
 ```
 
-이 옵션을 선택할 경우, 현재 코드의 하드코딩 로그인을 Firebase Auth 호출로 교체하는 추가 작업이 필요합니다 (다음 버전 예정).
+앱은 위 규칙과 맞게 **Firebase Authentication**(이메일·비밀번호)으로 로그인한 뒤 Firestore 에 접근합니다. 콘솔 **Authentication → Users** 에서 선생님 계정을 추가하고, 필요하면 사용자 **이름(display name)** 을 설정해 사이드바 표시명을 맞춥니다.
 
 ### 6) 페이지를 새로고침하면 끝
 
@@ -179,7 +179,7 @@ service cloud.firestore {
 
 ## 로컬 실행
 
-별도의 빌드가 필요 없으며, 정적 파일 서버로 열기만 하면 됩니다.
+`npm install` 후 **Firebase Authentication** 에서 로그인할 사용자를 만든 뒤, 정적 파일 서버로 열면 됩니다. Tailwind 클래스를 수정했다면 `npm run build:css` 로 `tailwind.css` 를 갱신합니다.
 
 ```bash
 # 방법 1) Python 내장 서버
@@ -195,6 +195,12 @@ npx --yes serve .
 
 > `firebase.js` 는 ES 모듈을 사용하므로 정적 파일 서버를 통해 열어야 합니다. `index.html` 을 더블클릭으로 여는 `file://` 방식은 모듈 로드 보안 정책상 차단됩니다.
 
+### 로그인 (Firebase Authentication)
+
+앱은 **이메일·비밀번호** 로그인만 지원합니다. 계정은 Firebase 콘솔 **Authentication → Users** 에서 관리합니다.
+
+**Vercel 등 배포 URL** 을 사용할 경우, Firebase 콘솔 → Authentication → **Settings → 승인된 도메인** 에 배포 도메인(예: `*.vercel.app`)을 추가해야 로그인할 수 있습니다.
+
 ### 첫 실행 시 동작
 
 1. `firebase-config.js` 의 값이 비어 있으면 **"Firebase 설정이 필요합니다" 안내 배너**가 표시됩니다.
@@ -202,23 +208,24 @@ npx --yes serve .
 3. 로그인에 성공하면 학생 목록을 볼 수 있습니다.
 4. Firestore 가 비어 있으면 더미 학생 3명이 자동 생성되어 한 번만 시드됩니다.
 
-### 데이터 / 세션 초기화
+### 데이터 / 로컬 잔여 키
 
 | 위치 | 키 | 설명 |
 | --- | --- | --- |
 | Firestore 콘솔 | `students` 컬렉션 | 학생 데이터 (수동 삭제 시 다음 접속에서 더미 재시드) |
-| 브라우저 Local Storage | `haoting:session:v1` | 로그인 세션 (삭제 시 로그아웃 상태로 진입) |
 | 브라우저 Local Storage | `haoting:students:v1` | 이전 버전 잔존 데이터 (마이그레이션 후 사용 안 함, 수동 삭제 가능) |
+
+로그인 세션은 **Firebase Authentication** 이 관리합니다(브라우저 IndexedDB 등).
 
 ## Vercel 배포
 
 1. 이 폴더를 GitHub 저장소로 push
 2. [Vercel](https://vercel.com) 에서 해당 저장소를 Import
-3. **Framework Preset** 은 자동으로 **Other (Static)** 가 잡힙니다. 빌드 명령 없이 그대로 **Deploy**.
+3. **Deploy** — 빌드는 `vercel.json` 의 `buildCommand`(`npm run build`)를 따릅니다.
 
-배포 후 Firebase 콘솔의 **Authentication → Settings → 승인된 도메인** 에 Vercel 배포 도메인(예: `haoting-admin.vercel.app`) 을 추가해 주세요. (Auth 옵션 B 를 선택한 경우)
+배포 후 Firebase 콘솔의 **Authentication → Settings → 승인된 도메인** 에 Vercel 배포 도메인을 추가해 주세요.
 
-`vercel.json` 은 캐시 정책 정도만 지정되어 있어 삭제해도 무방합니다.
+`vercel.json` 에는 빌드 명령, 출력 디렉터리(`.` ), 캐시 헤더 등이 들어 있습니다.
 
 ## 라이선스
 

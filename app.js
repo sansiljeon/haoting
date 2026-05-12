@@ -2,11 +2,12 @@
  * 하오팅 중국어 관리자 시스템 - app.js
  *  - 순수 Vanilla JS (모듈 X, 단일 파일)
  *  - 학생 데이터: Firebase Firestore (window.HaotingDB 어댑터 사용)
- *  - 로그인 세션: localStorage (기기별)
+ *  - 로그인: Firebase Authentication (이메일·비밀번호, 세션은 Firebase 가 유지)
  *  - 화면 전환: 메인 영역(#main-view) DOM 교체 방식의 SPA
  * ============================================================ */
 (function () {
   "use strict";
+  void 0;
 
   /* ==========================================================
    * 1. 상수 / 상태
@@ -14,8 +15,6 @@
   // 이전 버전(로컬 저장 전용) 의 학생 데이터 키 — Firestore 가 비어 있을 때
   // 한 번 마이그레이션해 올리는 용도로만 참조합니다.
   const LEGACY_STUDENTS_KEY = "haoting:students:v1";
-  const STORAGE_SESSION_KEY = "haoting:session:v1";
-
   // 하오팅 중국어의 두 분 강사 (단일 출처). 학생 폼 select 옵션과 동기화됩니다.
   const INSTRUCTORS = ["박환희", "김정화"];
 
@@ -39,24 +38,32 @@
   ];
   const SCHEDULE_FLEXIBLE_DAY = "유동";
 
-  // 하오팅 중국어 선생님 계정 (백엔드가 없으므로 코드에 하드코딩).
-  // 실서비스 인증이 아닌 "내부용 소프트 게이트" 입니다.
-  const ACCOUNTS = [
-    {
-      username: "admin1",
-      password: "haoting1234",
-      displayName: "박환희 선생님",
-      instructorName: "박환희",
-      email: "admin1@haoting.kr",
-    },
-    {
-      username: "admin2",
-      password: "haoting1234",
-      displayName: "김정화 선생님",
-      instructorName: "김정화",
-      email: "admin2@haoting.kr",
-    },
-  ];
+  /** Firebase User 를 UI·상태에서 쓰는 형태로 변환합니다. */
+  function mapFirebaseUser(fbUser) {
+    if (!fbUser) return null;
+    const email = String(fbUser.email || "");
+    const displayName = (fbUser.displayName && String(fbUser.displayName).trim()) || email.split("@")[0] || "선생님";
+    return {
+      uid: fbUser.uid,
+      email,
+      displayName,
+    };
+  }
+
+  function firebaseAuthErrorMessage(err) {
+    const code = err && err.code;
+    const map = {
+      "auth/invalid-email": "이메일 형식이 올바르지 않습니다.",
+      "auth/user-disabled": "비활성화된 계정입니다. 관리자에게 문의해 주세요.",
+      "auth/user-not-found": "등록되지 않은 이메일입니다.",
+      "auth/wrong-password": "비밀번호가 올바르지 않습니다.",
+      "auth/invalid-credential": "이메일 또는 비밀번호가 올바르지 않습니다.",
+      "auth/too-many-requests": "시도 횟수가 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+      "auth/network-request-failed": "네트워크 오류입니다. 연결을 확인해 주세요.",
+    };
+    if (code && map[code]) return map[code];
+    return err && err.message ? String(err.message) : "로그인에 실패했습니다.";
+  }
 
   const state = {
     route: "students", // "students" | "sales"
@@ -73,6 +80,8 @@
 
   // Firestore 구독 해제 함수. 여러 번 구독되지 않도록 한 곳에서 보관합니다.
   let unsubscribeStudents = null;
+  let unsubscribeAuth = null;
+  let authListenerWired = false;
   /** 학생 폼 저장 중 중복 제출 방지 */
   let studentFormSubmitting = false;
 
@@ -148,10 +157,10 @@
   ];
 
   /* ==========================================================
-   * 3. 데이터 레이어 (Firestore 어댑터)
-   *    - 학생 데이터의 단일 진실 공급원은 Firestore "students" 컬렉션입니다.
-   *    - 변경(추가/수정/삭제)은 onSnapshot 으로 모든 기기에 자동 전파됩니다.
-   *    - app.js 는 SDK 를 직접 import 하지 않고 window.HaotingDB 만 호출합니다.
+   * 3. 데이터 레이어 (Firebase 어댑터)
+   *    - 학생 데이터: Firestore "students" (window.HaotingDB)
+   *    - 로그인: Firebase Authentication (window.HaotingDB.signInWithEmailPassword 등)
+   *    - app.js 는 Firebase SDK 를 직접 import 하지 않고 window.HaotingDB 만 호출합니다.
    * ========================================================== */
 
   // 신규/이전 버전 호환을 위해 누락된 필드를 안전한 기본값으로 채워 줍니다.
@@ -241,44 +250,6 @@
 
   function isDBReady() {
     return !!window.HaotingDB && window.HaotingDB.isReady();
-  }
-
-  /* ----- 세션 (로그인 상태) ----- */
-
-  function loadSession() {
-    try {
-      const raw = localStorage.getItem(STORAGE_SESSION_KEY);
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      // 저장된 세션의 username 이 현재 ACCOUNTS 에 존재하는지 확인 (방어적 검증)
-      const account = ACCOUNTS.find((a) => a.username === parsed.username);
-      if (!account) return null;
-      return account;
-    } catch {
-      return null;
-    }
-  }
-
-  function saveSession(account) {
-    try {
-      localStorage.setItem(
-        STORAGE_SESSION_KEY,
-        JSON.stringify({
-          username: account.username,
-          loggedInAt: new Date().toISOString(),
-        })
-      );
-    } catch (err) {
-      console.error("[saveSession]", err);
-    }
-  }
-
-  function clearSession() {
-    try {
-      localStorage.removeItem(STORAGE_SESSION_KEY);
-    } catch (err) {
-      console.error("[clearSession]", err);
-    }
   }
 
   /* ==========================================================
@@ -1649,6 +1620,23 @@
   /* ==========================================================
    * 10. 인증 (로그인 / 로그아웃 / 화면 전환)
    * ========================================================== */
+  function wireFirebaseAuthListener() {
+    if (authListenerWired || !isDBReady() || typeof window.HaotingDB.subscribeAuthState !== "function") {
+      return;
+    }
+    authListenerWired = true;
+    unsubscribeAuth = window.HaotingDB.subscribeAuthState((fbUser) => {
+      state.currentUser = fbUser ? mapFirebaseUser(fbUser) : null;
+      if (state.currentUser) {
+        applyUserToShell();
+        showApp();
+        navigate("students");
+      } else {
+        showLogin();
+      }
+    });
+  }
+
   function showLogin() {
     const loginScreen = document.getElementById("login-screen");
     const appShell = document.getElementById("app-shell");
@@ -1660,9 +1648,9 @@
       appShell.classList.add("hidden");
       appShell.classList.remove("flex");
     }
-    const usernameInput = document.getElementById("login-username");
-    if (usernameInput) {
-      setTimeout(() => usernameInput.focus(), 30);
+    const emailInput = document.getElementById("login-email");
+    if (emailInput) {
+      setTimeout(() => emailInput.focus(), 30);
     }
   }
 
@@ -1705,42 +1693,67 @@
     if (headerAvatar) headerAvatar.textContent = initial;
   }
 
-  function handleLoginSubmit(e) {
+  async function handleLoginSubmit(e) {
     e.preventDefault();
     const form = e.currentTarget;
-    const username = String(form.elements.username.value || "")
-      .trim()
-      .toLowerCase();
+    const email = String(form.elements.email.value || "").trim();
     const password = String(form.elements.password.value || "");
     const errorEl = document.getElementById("login-error");
 
-    const account = ACCOUNTS.find(
-      (a) => a.username === username && a.password === password
-    );
-
-    if (!account) {
+    if (!isDBReady()) {
+      const detail =
+        window.HaotingDB && typeof window.HaotingDB.configError === "function"
+          ? window.HaotingDB.configError()
+          : "Firebase 에 연결할 수 없습니다.";
       if (errorEl) {
-        errorEl.textContent = "아이디 또는 비밀번호가 올바르지 않습니다.";
+        errorEl.textContent = detail || "Firebase 설정을 확인해 주세요.";
         errorEl.classList.remove("hidden");
       }
-      form.elements.password.value = "";
+      return;
+    }
+
+    if (!email) {
+      if (errorEl) {
+        errorEl.textContent = "이메일을 입력해 주세요.";
+        errorEl.classList.remove("hidden");
+      }
+      form.elements.email.focus();
+      return;
+    }
+    if (!password) {
+      if (errorEl) {
+        errorEl.textContent = "비밀번호를 입력해 주세요.";
+        errorEl.classList.remove("hidden");
+      }
       form.elements.password.focus();
       return;
     }
 
-    if (errorEl) errorEl.classList.add("hidden");
-
-    state.currentUser = account;
-    saveSession(account);
-    applyUserToShell();
-    showApp();
-    navigate("students");
-    showToast(`${account.displayName} 환영합니다!`);
-    form.reset();
+    try {
+      const cred = await window.HaotingDB.signInWithEmailPassword(email, password);
+      if (errorEl) errorEl.classList.add("hidden");
+      const u = mapFirebaseUser(cred.user);
+      showToast(`${u.displayName} 님, 환영합니다!`);
+      form.reset();
+    } catch (err) {
+      console.error("[handleLoginSubmit]", err);
+      if (errorEl) {
+        errorEl.textContent = firebaseAuthErrorMessage(err);
+        errorEl.classList.remove("hidden");
+      }
+      form.elements.password.value = "";
+      form.elements.password.focus();
+    }
   }
 
-  function handleLogout() {
-    clearSession();
+  async function handleLogout() {
+    try {
+      if (window.HaotingDB && typeof window.HaotingDB.signOutUser === "function") {
+        await window.HaotingDB.signOutUser();
+      }
+    } catch (err) {
+      console.error("[handleLogout]", err);
+    }
     state.currentUser = null;
 
     // 학생 관리 화면 상태도 깔끔하게 초기화
@@ -1917,7 +1930,7 @@
   }
 
   function init() {
-    state.currentUser = loadSession();
+    state.currentUser = null;
 
     ensureScheduleDayChips();
     bindGlobalEvents();
@@ -1929,20 +1942,17 @@
       setTimeout(buildAndApplyFavicon, 1);
     }
 
-    // 학생 데이터(Firestore) 는 SDK 모듈 로딩이 끝난 뒤에만 초기화 가능합니다.
-    whenDBReady(initData);
+    // Firestore + Auth 는 firebase.js 모듈 로딩 후에만 사용 가능합니다.
+    whenDBReady(() => {
+      initData();
+      wireFirebaseAuthListener();
+    });
 
-    if (state.currentUser) {
-      applyUserToShell();
-      showApp();
-      navigate("students");
-    } else {
-      showLogin();
-    }
+    showLogin();
   }
 
   // Firebase SDK 모듈(firebase.js) 이 window.HaotingDB 를 노출할 때까지 대기.
-  // 느린 네트워크에서는 모듈이 타임아웃 이후에 도착할 수 있으므로, db-ready 이벤트에서는
+  // 느린 네트워크에서는 모듈이 타임아웃 이후에 도착할 수 있으므로, haoting:db-ready 이벤트에서는
   // 항상 다시 initData 를 시도합니다(이미 구독 중이면 subscribeToStudents 가 정리 후 재구독).
   function whenDBReady(callback) {
     if (window.HaotingDB) {

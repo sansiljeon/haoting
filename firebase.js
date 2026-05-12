@@ -2,12 +2,17 @@
  * Firebase 데이터 레이어
  * ------------------------------------------------------------
  * - Firestore 의 "students" 컬렉션을 단일 진실 공급원으로 사용합니다.
- * - 어느 기기에서든 같은 Firestore 데이터를 보고, 한 쪽에서 변경하면
- *   onSnapshot 으로 다른 쪽 화면에도 즉시 반영됩니다.
- * - 외부에는 window.HaotingDB 를 통해 비동기 CRUD API 만 노출합니다.
+ * - Authentication: 이메일·비밀번호 로그인 (getAuth, signInWithEmailAndPassword 등).
+ * - 외부에는 window.HaotingDB 를 통해 Firestore CRUD 및 Auth API 를 노출합니다.
  *   (app.js 는 Firebase SDK 를 직접 import 하지 않고 이 객체만 사용)
  * ============================================================ */
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
+import {
+  getAuth,
+  signInWithEmailAndPassword as firebaseSignInWithEmailAndPassword,
+  signOut as firebaseSignOut,
+  onAuthStateChanged,
+} from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
 import {
   getFirestore,
   collection,
@@ -44,15 +49,20 @@ const valid = isConfigValid(cfg);
 
 let app = null;
 let db = null;
+let auth = null;
 let initError = null;
 
 if (valid) {
   try {
     app = initializeApp(cfg);
     db = getFirestore(app);
+    auth = getAuth(app);
   } catch (err) {
     console.error("[firebase] init failed", err);
     initError = err;
+    app = null;
+    db = null;
+    auth = null;
   }
 }
 
@@ -63,9 +73,35 @@ function stripId(obj) {
 }
 
 window.HaotingDB = {
-  /** Firebase 가 정상 초기화되어 사용 가능한 상태인지 */
+  /** Firebase(Firestore + Auth) 가 정상 초기화되어 사용 가능한 상태인지 */
   isReady() {
-    return !!db && !initError;
+    return !!db && !!auth && !initError;
+  },
+
+  /**
+   * 로그인 상태 구독. 콜백은 Firebase User 또는 null 을 받습니다.
+   * @returns {() => void} 구독 해제 함수
+   */
+  subscribeAuthState(callback) {
+    if (!auth) {
+      queueMicrotask(() => callback(null));
+      return () => {};
+    }
+    return onAuthStateChanged(auth, callback);
+  },
+
+  /** 이메일·비밀번호 로그인 (Firebase Authentication) */
+  signInWithEmailPassword(email, password) {
+    if (!auth) {
+      return Promise.reject(new Error("Firebase Auth is not initialized"));
+    }
+    return firebaseSignInWithEmailAndPassword(auth, String(email || "").trim(), password);
+  },
+
+  /** 로그아웃 */
+  signOutUser() {
+    if (!auth) return Promise.resolve();
+    return firebaseSignOut(auth);
   },
 
   /** 현재 막혀 있는 이유. UI 에 표시할 사람이 읽을 수 있는 한국어 메시지. */

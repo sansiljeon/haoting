@@ -83,19 +83,19 @@
         >
           <div class="space-y-4">
             <div>
-              <label for="login-username" class="form-label">아이디</label>
+              <label for="login-email" class="form-label">이메일</label>
               <div class="relative">
                 <i
-                  class="fa-solid fa-user pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                  class="fa-solid fa-envelope pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
                 ></i>
                 <input
-                  id="login-username"
-                  name="username"
-                  type="text"
-                  autocomplete="username"
+                  id="login-email"
+                  name="email"
+                  type="email"
+                  autocomplete="email"
                   required
                   class="form-input pl-9"
-                  placeholder="admin1"
+                  placeholder="name@example.com"
                 />
               </div>
             </div>
@@ -141,35 +141,8 @@
           </button>
         </form>
 
-        <details class="mt-4 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs text-slate-600">
-          <summary class="cursor-pointer font-medium text-slate-700">
-            <i class="fa-solid fa-circle-info mr-1 text-slate-400"></i>
-            테스트 계정 안내
-          </summary>
-          <div class="mt-3 space-y-2 leading-relaxed">
-            <p>
-              <span class="font-semibold text-slate-800">박환희 선생님</span>
-              · ID
-              <code class="rounded bg-slate-100 px-1.5 py-0.5">admin1</code>
-              / PW
-              <code class="rounded bg-slate-100 px-1.5 py-0.5">haoting1234</code>
-            </p>
-            <p>
-              <span class="font-semibold text-slate-800">김정화 선생님</span>
-              · ID
-              <code class="rounded bg-slate-100 px-1.5 py-0.5">admin2</code>
-              / PW
-              <code class="rounded bg-slate-100 px-1.5 py-0.5">haoting1234</code>
-            </p>
-            <p class="mt-2 text-[11px] text-slate-400">
-              ※ 본 시스템은 백엔드 없이 동작하므로 진정한 의미의 보안 인증을 제공하지 않습니다.
-              내부 사용 용도로만 활용해 주세요.
-            </p>
-          </div>
-        </details>
-
         <p class="mt-6 text-center text-[11px] text-slate-400">
-          © 하오팅 중국어 · 모든 데이터는 브라우저에만 저장됩니다.
+          © 하오팅 중국어 · 학생 데이터는 Firebase 에 저장됩니다.
         </p>
       </div>
     </div>
@@ -684,11 +657,10 @@
 
     <!-- ============== 데이터 레이어: Firebase ============== -->
     <!--
-      ⚠️ 로딩 순서 주의:
-      1) firebase-config.js : 동기 스크립트(즉시 평가) → window.HAOTING_FIREBASE_CONFIG 정의
-      2) firebase.js (module): 위 설정을 읽어 SDK 초기화 후 window.HaotingDB 노출
-      3) app.js (defer)      : window.HaotingDB 를 통해 데이터를 다룹니다.
-      defer / module 모두 문서 순서대로 실행되므로 위 순서가 보장됩니다.
+      로딩 순서:
+      1) firebase-config.js    : window.HAOTING_FIREBASE_CONFIG
+      2) firebase.js (module)    : Firestore + Auth → window.HaotingDB
+      3) app.js (defer)
     -->
     <script src="./firebase-config.js"></script>
     <script type="module" src="./firebase.js"></script>
