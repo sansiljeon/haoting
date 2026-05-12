@@ -65,6 +65,14 @@ textarea.form-input {
   resize: vertical;
 }
 
+/* 로그인 필드: .form-input 의 padding 단축이 Tailwind pl-* 보다 나중에 적용되어 겹침 발생 → 아이콘 오른쪽부터 글자 */
+#login-form .relative > .form-input {
+  padding-left: 2.5rem;
+}
+#login-form .relative > .form-input[name="password"] {
+  padding-right: 2.75rem;
+}
+
 /* ---- 사이드바 활성 메뉴 ---- */
 .nav-item.active {
   background-color: var(--brand-50);
