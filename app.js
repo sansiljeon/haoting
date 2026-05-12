@@ -1276,6 +1276,7 @@
       resetForm(form);
     }
 
+    modal.classList.remove("hidden");
     modal.classList.add("modal-open");
     document.body.style.overflow = "hidden";
     setTimeout(() => {
@@ -1288,6 +1289,7 @@
     const modal = document.getElementById("student-modal");
     if (!modal) return;
     modal.classList.remove("modal-open");
+    modal.classList.add("hidden");
     document.body.style.overflow = "";
     state.editingId = null;
   }
@@ -1521,13 +1523,12 @@
     try {
       if (state.editingId) {
         await updateStudent(state.editingId, draft);
-        closeStudentModal();
         showToast("학생 정보가 수정되었습니다.");
       } else {
         await createStudent(draft);
-        closeStudentModal();
         showToast("새 학생이 추가되었습니다.");
       }
+      closeStudentModal();
       navigate("students");
     } catch (err) {
       console.error("[handleStudentFormSubmit]", err);
