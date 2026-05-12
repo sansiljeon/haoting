@@ -73,6 +73,8 @@
 
   // Firestore 구독 해제 함수. 여러 번 구독되지 않도록 한 곳에서 보관합니다.
   let unsubscribeStudents = null;
+  /** 학생 폼 저장 중 중복 제출 방지 */
+  let studentFormSubmitting = false;
 
   /* ==========================================================
    * 2. 더미 데이터
@@ -1276,6 +1278,7 @@
       resetForm(form);
     }
 
+    modal.removeAttribute("hidden");
     modal.style.removeProperty("display");
     modal.classList.remove("hidden");
     modal.classList.add("modal-open");
@@ -1291,7 +1294,7 @@
     if (!modal) return;
     modal.classList.remove("modal-open");
     modal.classList.add("hidden");
-    // 일부 환경에서 class 만으로 display 가 남는 경우를 막기 위해 강제로 숨깁니다.
+    modal.setAttribute("hidden", "");
     modal.style.setProperty("display", "none", "important");
     document.body.style.overflow = "";
     state.editingId = null;
@@ -1503,6 +1506,7 @@
   async function handleStudentFormSubmit(e) {
     e.preventDefault();
     const form = e.currentTarget;
+    if (!form || form.id !== "student-form") return;
 
     if (!isDBReady()) {
       const detail =
@@ -1526,11 +1530,24 @@
       draft.contact = normalizeKoreanMobileContact(draft.contact);
     }
 
-    // 저장 버튼 중복 클릭 방지 (#student-form-submit 은 type=button)
+    if (studentFormSubmitting) {
+      showToast("저장 처리 중입니다. 잠시만 기다려 주세요.");
+      return;
+    }
+    studentFormSubmitting = true;
+
     const submitBtn = document.getElementById("student-form-submit");
     if (submitBtn) submitBtn.disabled = true;
 
     const editingIdBeforeSave = state.editingId;
+    const successToast = editingIdBeforeSave
+      ? "학생 정보가 수정되었습니다."
+      : "새 학생이 추가되었습니다.";
+
+    const releaseSubmitUi = () => {
+      studentFormSubmitting = false;
+      if (submitBtn) submitBtn.disabled = false;
+    };
 
     try {
       if (editingIdBeforeSave) {
@@ -1538,16 +1555,18 @@
       } else {
         await createStudent(draft);
       }
-      closeStudentModal();
-      navigate("students");
-      showToast(
-        editingIdBeforeSave ? "학생 정보가 수정되었습니다." : "새 학생이 추가되었습니다."
-      );
+      // Firestore onSnapshot → render() 가 이어질 때 동기 레이아웃과 겹치면
+      // 모달 display 가 남는 브라우저가 있어, 닫기·네비는 다음 작업으로 미룹니다.
+      setTimeout(() => {
+        closeStudentModal();
+        navigate("students");
+        showToast(successToast);
+        releaseSubmitUi();
+      }, 0);
     } catch (err) {
       console.error("[handleStudentFormSubmit]", err);
       showToast("저장에 실패했습니다. 네트워크와 Firebase 설정을 확인해 주세요.");
-    } finally {
-      if (submitBtn) submitBtn.disabled = false;
+      releaseSubmitUi();
     }
   }
 
@@ -1822,12 +1841,6 @@
     const studentForm = document.getElementById("student-form");
     if (studentForm) {
       studentForm.addEventListener("submit", handleStudentFormSubmit);
-      document.getElementById("student-form-submit")?.addEventListener("click", () =>
-        handleStudentFormSubmit({
-          preventDefault() {},
-          currentTarget: studentForm,
-        })
-      );
     }
 
     const contactInput = document.getElementById("f-contact");
