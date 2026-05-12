@@ -1506,9 +1506,10 @@
   async function handleStudentFormSubmit(e) {
     e.preventDefault();
     const form = e.currentTarget;
-    if (!form || form.id !== "student-form") return;
-
+    console.log("1. 폼 전송 이벤트 정상 시작됨!");
+  
     if (!isDBReady()) {
+      console.log("2. 실패: DB가 아직 준비되지 않음");
       const detail =
         window.HaotingDB && typeof window.HaotingDB.configError === "function"
           ? window.HaotingDB.configError()
@@ -1550,13 +1551,14 @@
     };
 
     try {
+      console.log("3. Firebase로 데이터 전송 시도 중...");
       if (editingIdBeforeSave) {
         await updateStudent(editingIdBeforeSave, draft);
       } else {
         await createStudent(draft);
       }
-      // Firestore onSnapshot → render() 가 이어질 때 동기 레이아웃과 겹치면
-      // 모달 display 가 남는 브라우저가 있어, 닫기·네비는 다음 작업으로 미룹니다.
+      console.log("4. 데이터 저장 성공! 이제 창을 닫습니다."); 
+  
       setTimeout(() => {
         closeStudentModal();
         navigate("students");
@@ -1564,7 +1566,7 @@
         releaseSubmitUi();
       }, 0);
     } catch (err) {
-      console.error("[handleStudentFormSubmit]", err);
+      console.error("5. 데이터 저장 중 에러 발생:", err);
       showToast("저장에 실패했습니다. 네트워크와 Firebase 설정을 확인해 주세요.");
       releaseSubmitUi();
     }
