@@ -126,6 +126,138 @@ textarea.form-input {
   display: flex !important;
 }
 
+/* ---- 학생 상세 모달 ---- */
+.student-detail-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 1rem;
+  background:
+    radial-gradient(circle at top right, rgba(16, 185, 129, 0.08), transparent 28%),
+    linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  padding: 1rem 1.1rem;
+}
+
+.student-detail-name {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+
+.student-detail-meta {
+  margin: 0.3rem 0 0;
+  font-size: 0.8125rem;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.student-detail-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.student-detail-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  padding: 0.45rem 0.8rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.student-detail-chip.is-active {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #047857;
+}
+
+.student-detail-chip.is-inactive {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #475569;
+}
+
+.student-detail-sections {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.student-detail-section {
+  border: 1px solid #e2e8f0;
+  border-radius: 1rem;
+  background: #ffffff;
+  box-shadow: 0 8px 24px -22px rgba(15, 23, 42, 0.32);
+  padding: 1rem;
+}
+
+.student-detail-section-title {
+  margin: 0 0 0.8rem;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+
+.student-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem 1rem;
+}
+
+.student-detail-field {
+  min-width: 0;
+}
+
+.student-detail-field.is-full {
+  grid-column: 1 / -1;
+}
+
+.student-detail-label {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.student-detail-value {
+  margin: 0;
+  min-height: 2.75rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.8rem;
+  background: #f8fafc;
+  padding: 0.7rem 0.8rem;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: #0f172a;
+  word-break: break-word;
+}
+
+.student-detail-value.is-empty {
+  color: #94a3b8;
+}
+
+.student-detail-value.is-multiline {
+  white-space: pre-wrap;
+}
+
+@media (min-width: 768px) {
+  .student-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 /* ---- 토글 스위치 ---- */
 .toggle {
   position: relative;
@@ -232,6 +364,157 @@ textarea.form-input {
 
 ::-webkit-scrollbar-thumb:hover {
   background-color: #cbd5e1;
+}
+
+/* ---- 학생 회차 관리 ---- */
+.student-inline-detail-panel {
+  padding: 1.1rem;
+}
+
+.student-inline-detail-header {
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.9);
+}
+
+.student-inline-detail-header p:last-child {
+  line-height: 1.55;
+}
+
+.student-inline-detail-grid {
+  align-items: stretch;
+  gap: 0 1.5rem;
+}
+
+.student-inline-detail-item {
+  min-width: 0;
+  padding: 0.9rem 0 0.85rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.student-inline-detail-label {
+  padding-top: 0.15rem;
+  color: #64748b !important;
+}
+
+.student-inline-detail-value {
+  line-height: 1.6;
+}
+
+.session-manager-panel {
+  border-color: #c7f9d8 !important;
+  background:
+    radial-gradient(circle at top right, rgba(16, 185, 129, 0.08), transparent 26%),
+    linear-gradient(180deg, #ffffff 0%, #fcfffd 100%);
+}
+
+.session-manager-toolbar {
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.9);
+}
+
+.session-tabs-wrap {
+  padding: 0.95rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 1rem;
+  background: #f8fafc;
+}
+
+.session-tab-button {
+  min-width: 5.4rem;
+  justify-content: center;
+  min-height: 2.45rem;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.session-tab-button:hover {
+  border-color: #94a3b8;
+  transform: translateY(-1px);
+}
+
+.session-tab-button.is-active {
+  box-shadow: 0 10px 20px -14px rgba(5, 150, 105, 0.7);
+}
+
+.session-tab-button.is-complete {
+  border-color: #475569;
+  background-color: #64748b;
+  color: #ffffff;
+  box-shadow: 0 10px 22px -16px rgba(71, 85, 105, 0.45);
+}
+
+.session-tab-button.is-complete:hover {
+  border-color: #334155;
+  background-color: #475569;
+  color: #ffffff;
+}
+
+.session-complete-toggle {
+  margin-left: 0.05rem;
+  padding-right: 0.85rem !important;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.session-complete-toggle.is-on {
+  border-color: #475569 !important;
+  background-color: #475569 !important;
+  color: #ffffff !important;
+  box-shadow: 0 8px 18px -14px rgba(51, 65, 85, 0.65);
+}
+
+.session-complete-toggle.is-on .session-progress-check {
+  border-color: rgba(255, 255, 255, 0.45);
+}
+
+.session-detail-card {
+  border-width: 1px;
+  box-shadow: 0 16px 36px -26px rgba(15, 23, 42, 0.4);
+}
+
+.session-progress-item > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.session-detail-fields > div,
+.session-message-box {
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.session-detail-fields > div {
+  padding: 0.9rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.85rem;
+}
+
+.session-message-box {
+  border-color: #dbeafe !important;
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(255, 255, 255, 0.96));
+}
+
+.session-message-preview {
+  min-height: 190px !important;
+  border-color: #cbd5e1 !important;
+  background: #fff !important;
+  line-height: 1.6 !important;
+}
+
+@media (max-width: 767px) {
+  .student-inline-detail-item {
+    padding: 0.8rem 0 0.75rem;
+  }
+
+  .student-inline-detail-label {
+    width: 4.4rem;
+  }
+
+  .session-tabs-wrap {
+    padding: 0.8rem;
+  }
 }
 
 /* ---- 수강생 상담 기록지 (상담기록 탭) ---- */

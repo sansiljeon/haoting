@@ -37,6 +37,17 @@
     "HSK 6급",
   ];
   const SCHEDULE_FLEXIBLE_DAY = "유동";
+  const SESSION_NOTIFICATION_TEMPLATE = `[이름]님, 안녕하세요!
+예정된 수업 안내드립니다.
+
+[수업 안내 - 총 [총 회차]회차 중 [당 수업 회차]회]
+일정: [수업 일정]
+
+⚠️ 장소 관련 안내
+센터 대관 상황에 따라 당일 수업 장소가 변경될 수 있습니다. 장소 변경 시 수업 시작 전 미리 연락드릴게요! 혹시 별도의 연락이 없더라도 당황하지 마시고 사무실로 와주시면 바로 안내해 드리겠습니다.
+
+이번 주도 의미 있는 시간이 되도록 정성껏 준비하겠습니다. 곧 뵙겠습니다! 😊
+수업 일정에 변경이 필요하신 경우, 언제든지 편하게 연락주세요! 😊`;
 
   /** Firebase User 를 UI·상태에서 쓰는 형태로 변환합니다. */
   function mapFirebaseUser(fbUser) {
@@ -114,7 +125,9 @@
     pendingDeleteId: null, // 확인 모달에서 삭제 대상
     salesFilter: "all", // 매출 화면 필터: "all" | "active"
     currentUser: null, // 로그인 한 선생님 정보 (없으면 비로그인)
-    expandedRowIds: new Set(), // 모바일에서 인라인 확장된 학생 행 id 들
+    expandedRowIds: new Set(), // 회차 관리가 펼쳐진 학생 행 id 들
+    expandedSessionPanelByStudent: {}, // 학생별 현재 펼쳐진 회차 번호
+    detailStudentId: null, // 읽기 전용 상세 모달에 표시 중인 학생 id
   };
 
   // Firestore 구독 해제 함수. 여러 번 구독되지 않도록 한 곳에서 보관합니다.
@@ -218,11 +231,36 @@
   }
 
   // 신규/이전 버전 호환을 위해 누락된 필드를 안전한 기본값으로 채워 줍니다.
+  function normalizeSessionRecords(records) {
+    if (!Array.isArray(records)) return [];
+    const map = new Map();
+    records.forEach((item) => {
+      if (!item || typeof item !== "object") return;
+      const sessionNumber = Number(item.sessionNumber);
+      if (!Number.isInteger(sessionNumber) || sessionNumber <= 0) return;
+      const legacyCompletedAt = String(item.completedAt || "").trim();
+      const sessionDate = String(item.sessionDate || legacyCompletedAt || item.scheduledDate || "").trim();
+      const startTime = String(item.startTime || "").trim();
+      const endTime = String(item.endTime || "").trim();
+      const isCompleted = item.isCompleted != null ? !!item.isCompleted : !!legacyCompletedAt;
+      if (!sessionDate && !startTime && !endTime && !isCompleted) return;
+      map.set(sessionNumber, {
+        sessionNumber,
+        sessionDate,
+        startTime,
+        endTime,
+        isCompleted,
+      });
+    });
+    return Array.from(map.values()).sort((a, b) => a.sessionNumber - b.sessionNumber);
+  }
+
   function normalizeStudent(s) {
     if (!s || typeof s !== "object") return s;
     return Object.assign({}, s, {
       scheduleDays: Array.isArray(s.scheduleDays) ? s.scheduleDays : [],
       scheduleDayTimes: normalizeScheduleDayTimesMap(s.scheduleDayTimes),
+      sessionRecords: normalizeSessionRecords(s.sessionRecords),
     });
   }
 
@@ -236,6 +274,160 @@
         return timeStr ? `${dayStr} ${timeStr}` : dayStr;
       })
       .join(" · ");
+  }
+
+  function getStudentSessionCount(student) {
+    return normalizeSessionRecords(student && student.sessionRecords).filter((item) => item.isCompleted).length;
+  }
+
+  function getLatestCompletedSessionDate(records) {
+    const list = normalizeSessionRecords(records);
+    if (list.length === 0) return "";
+    return list
+      .filter((item) => item.isCompleted)
+      .map((item) => item.sessionDate)
+      .filter(Boolean)
+      .sort()
+      .at(-1) || "";
+  }
+
+  function getWeekdayLabelFromISO(value) {
+    const trimmed = String(value || "").trim();
+    if (!trimmed) return "";
+    const d = new Date(trimmed);
+    if (Number.isNaN(d.getTime())) return "";
+    return WEEKDAYS[d.getDay()];
+  }
+
+  function formatTimeForMessage(value) {
+    const trimmed = String(value || "").trim();
+    if (!trimmed) return "";
+    const [hhRaw, mmRaw] = trimmed.split(":");
+    const hh = Number(hhRaw);
+    const mm = Number(mmRaw || 0);
+    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return trimmed;
+    const meridiem = hh < 12 ? "오전" : "오후";
+    const hour12 = hh % 12 === 0 ? 12 : hh % 12;
+    if (mm === 0) return `${meridiem} ${hour12}시`;
+    return `${meridiem} ${hour12}시 ${mm}분`;
+  }
+
+  function formatScheduledDateForMessage(value) {
+    const trimmed = String(value || "").trim();
+    if (!trimmed) return "";
+    const d = new Date(trimmed);
+    if (Number.isNaN(d.getTime())) return trimmed;
+    const weekday = WEEKDAYS[d.getDay()];
+    return `${d.getMonth() + 1}월 ${d.getDate()}일 (${weekday})`;
+  }
+
+  function buildScheduledTimeRangeText(startTime, endTime) {
+    const start = formatTimeForMessage(startTime);
+    const end = formatTimeForMessage(endTime);
+    if (start && end) return `${start} ~ ${end}`;
+    return start || end || "";
+  }
+
+  function buildSessionNotificationMessage(student, slot) {
+    if (!student || !slot) return "";
+    const dateLabel = formatScheduledDateForMessage(slot.sessionDate);
+    const timeLabel = buildScheduledTimeRangeText(slot.startTime, slot.endTime);
+    if (!dateLabel || !timeLabel) return "";
+    const rawName = String(student.name || "").trim();
+    const studentName = rawName.length > 1 ? rawName.slice(1) : rawName;
+    if (!studentName) return "";
+    const totalSessions = Math.max(0, Number(student.registeredSessions) || 0);
+    const scheduleText = `${dateLabel} ${timeLabel}`.trim();
+    return SESSION_NOTIFICATION_TEMPLATE
+      .replace("[이름]", studentName)
+      .replace("[총 회차]", String(totalSessions))
+      .replace("[당 수업 회차]", String(slot.sessionNumber))
+      .replace("[수업 일정]", scheduleText);
+  }
+
+  function getStudentSessionSlots(student) {
+    const normalized = normalizeStudent(student);
+    const map = new Map(
+      normalized.sessionRecords.map((item) => [item.sessionNumber, item])
+    );
+    const registered = Math.max(0, Number(normalized.registeredSessions) || 0);
+    const maxCompleted =
+      normalized.sessionRecords.length > 0
+        ? Math.max(...normalized.sessionRecords.map((item) => item.sessionNumber))
+        : 0;
+    const total = Math.max(registered, maxCompleted);
+    return Array.from({ length: total }, (_, idx) => {
+      const sessionNumber = idx + 1;
+      const record = map.get(sessionNumber) || {};
+      return {
+        sessionNumber,
+        sessionDate: record.sessionDate || "",
+        startTime: record.startTime || "",
+        endTime: record.endTime || "",
+        isCompleted: !!record.isCompleted,
+      };
+    });
+  }
+
+  async function saveStudentSessionRecord(studentId, sessionNumber, patch) {
+    const student = state.students.find((item) => item.id === studentId);
+    if (!student) {
+      showToast("학생 정보를 찾을 수 없습니다.");
+      render();
+      return;
+    }
+
+    const next = normalizeSessionRecords(student.sessionRecords);
+    const nextMap = new Map(next.map((item) => [item.sessionNumber, Object.assign({}, item)]));
+    const prev = nextMap.get(sessionNumber) || {
+      sessionNumber,
+      sessionDate: "",
+      startTime: "",
+      endTime: "",
+      isCompleted: false,
+    };
+    const merged = Object.assign({}, prev, patch || {}, { sessionNumber });
+    if (
+      !merged.sessionDate &&
+      !merged.startTime &&
+      !merged.endTime &&
+      !merged.isCompleted
+    ) {
+      nextMap.delete(sessionNumber);
+    } else {
+      nextMap.set(sessionNumber, merged);
+    }
+
+    const payloadRecords = normalizeSessionRecords(
+      Array.from(nextMap.values())
+    );
+    const latestCompletedDate = getLatestCompletedSessionDate(payloadRecords);
+
+    student.sessionRecords = payloadRecords;
+    student.lastClassDate = latestCompletedDate;
+    render();
+
+    try {
+      await updateStudent(studentId, {
+        sessionRecords: payloadRecords,
+        lastClassDate: latestCompletedDate,
+      });
+    } catch (err) {
+      console.error("[saveStudentSessionRecord]", err);
+      showToast("회차 저장에 실패했습니다. 잠시 후 다시 시도해 주세요.");
+      render();
+    }
+  }
+
+  function toggleSessionDetail(studentId, sessionNumber) {
+    if (!studentId || !sessionNumber) return;
+    const current = state.expandedSessionPanelByStudent[studentId];
+    if (current === sessionNumber) {
+      delete state.expandedSessionPanelByStudent[studentId];
+    } else {
+      state.expandedSessionPanelByStudent[studentId] = sessionNumber;
+    }
+    render();
   }
 
   function normalizeCounselingRecord(r) {
@@ -393,6 +585,17 @@
     });
   }
 
+  function clearDataSubscriptions() {
+    if (unsubscribeStudents) {
+      unsubscribeStudents();
+      unsubscribeStudents = null;
+    }
+    if (unsubscribeCounselingRecords) {
+      unsubscribeCounselingRecords();
+      unsubscribeCounselingRecords = null;
+    }
+  }
+
   async function createStudent(draft) {
     if (!isDBReady()) throw new Error("Firestore 가 준비되지 않았습니다.");
     return window.HaotingDB.createStudent(draft);
@@ -526,6 +729,20 @@
     return `${yyyy}.${mm}.${dd}`;
   }
 
+  function formatCountWithUnit(value, unit) {
+    const n = Number(value);
+    return Number.isFinite(n) ? `${formatNumber(n)}${unit}` : "-";
+  }
+
+  function formatCurrencyOrDash(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? formatCurrency(n) : "-";
+  }
+
+  function getStudentStatusLabel(student) {
+    return student && student.isActive ? "현재 수강 중" : "휴원·퇴원";
+  }
+
   function todayISO() {
     const now = new Date();
     const yyyy = now.getFullYear();
@@ -627,6 +844,8 @@
       main.innerHTML = renderCounselingView();
       bindCounselingViewEvents();
     }
+
+    syncStudentDetailModal();
   }
 
   function bindSalesViewEvents() {
@@ -1280,8 +1499,10 @@
             <th class="whitespace-nowrap px-4 py-3 text-right md:px-6">등록 횟수</th>
             <th class="hidden whitespace-nowrap px-4 py-3 md:table-cell md:px-6">진도</th>
             <th class="whitespace-nowrap px-4 py-3 md:px-6">수강 여부</th>
-            <th class="whitespace-nowrap px-4 py-3 text-right md:px-6">
-              <span class="sr-only">작업</span>
+            <th class="whitespace-nowrap px-2 py-3 text-center md:px-3">회차 관리</th>
+            <th class="whitespace-nowrap px-2 py-3 text-center md:px-3">수정</th>
+            <th class="whitespace-nowrap px-2 py-3 text-center md:px-3">
+              <span class="sr-only">삭제</span>
             </th>
           </tr>
         </thead>
@@ -1295,6 +1516,7 @@
   function renderStudentRow(s, rowIndex) {
     const num = Number(rowIndex) + 1;
     const isExpanded = state.expandedRowIds.has(s.id);
+    const completedSessions = getStudentSessionCount(s);
     const statusBadge = s.isActive
       ? '<span class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 md:px-2.5 md:text-xs"><i class="fa-solid fa-circle text-[6px]"></i>수강 중</span>'
       : '<span class="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 md:px-2.5 md:text-xs"><i class="fa-solid fa-circle text-[6px]"></i>휴원·퇴원</span>';
@@ -1319,41 +1541,180 @@
         <td class="hidden whitespace-nowrap px-4 py-3.5 text-slate-700 md:table-cell md:px-6">${escapeHtml(s.contact || "-")}</td>
         <td class="hidden whitespace-nowrap px-4 py-3.5 text-slate-700 md:table-cell md:px-6">${escapeHtml(s.curriculum || "-")}</td>
         <td class="whitespace-nowrap px-4 py-3.5 text-right tabular-nums text-slate-700 md:px-6">
-          ${formatNumber(s.registeredSessions || 0)}회
+          <div class="flex flex-col items-end">
+            <span>${formatNumber(s.registeredSessions || 0)}회</span>
+            <span class="mt-0.5 text-[11px] text-slate-400">${formatNumber(completedSessions)}회 진행</span>
+          </div>
         </td>
         <td class="hidden px-4 py-3.5 text-slate-600 md:table-cell md:px-6">
           <span class="line-clamp-1 max-w-[260px]">${escapeHtml(s.progress || "-")}</span>
         </td>
         <td class="whitespace-nowrap px-4 py-3.5 md:px-6">${statusBadge}</td>
-        <td class="whitespace-nowrap px-4 py-3.5 text-right md:px-6">
-          <div class="inline-flex items-center gap-1">
-            <button
-              type="button"
-              class="action-edit inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-brand-600"
-              data-id="${escapeHtml(s.id)}"
-              title="수정"
-              aria-label="수정"
-            >
-              <i class="fa-solid fa-pen-to-square"></i>
-            </button>
-            <button
-              type="button"
-              class="action-delete inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600"
-              data-id="${escapeHtml(s.id)}"
-              title="삭제"
-              aria-label="삭제"
-            >
-              <i class="fa-solid fa-trash"></i>
-            </button>
-          </div>
+        <td class="whitespace-nowrap px-2 py-3.5 text-center md:px-3">
+          <button
+            type="button"
+            class="action-sessions inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-brand-50 hover:text-brand-600"
+            data-id="${escapeHtml(s.id)}"
+            title="회차 관리"
+            aria-label="회차 관리"
+          >
+            <i class="fa-solid fa-list-check"></i>
+          </button>
+        </td>
+        <td class="whitespace-nowrap px-2 py-3.5 text-center md:px-3">
+          <button
+            type="button"
+            class="action-edit inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-brand-600"
+            data-id="${escapeHtml(s.id)}"
+            title="수정"
+            aria-label="수정"
+          >
+            <i class="fa-solid fa-pen-to-square"></i>
+          </button>
+        </td>
+        <td class="whitespace-nowrap px-2 py-3.5 text-center md:px-3">
+          <button
+            type="button"
+            class="action-delete inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+            data-id="${escapeHtml(s.id)}"
+            title="삭제"
+            aria-label="삭제"
+          >
+            <i class="fa-solid fa-trash"></i>
+          </button>
         </td>
       </tr>
       ${isExpanded ? renderStudentExpandedRow(s) : ""}
     `;
   }
 
-  // 모바일에서 행을 탭하면 보이는 상세 정보 (데스크탑에서는 컬럼이 다 보이므로 노출하지 않음)
+  function getStudentDetailSections(student) {
+    return [
+      {
+        title: "기본 정보",
+        items: [
+          { label: "학생 이름", value: student.name },
+          { label: "담당 강사", value: student.assignedInstructor },
+          { label: "연락처", value: student.contact },
+          { label: "지역", value: student.region },
+          { label: "수업장소", value: student.location },
+          { label: "유입 경로", value: student.inflowChannel },
+        ],
+      },
+      {
+        title: "수업 정보",
+        items: [
+          { label: "커리큘럼", value: student.curriculum },
+          { label: "등록 횟수", value: formatCountWithUnit(student.registeredSessions, "회") },
+          { label: "수업 시간", value: formatCountWithUnit(student.durationMinutes, "분") },
+          { label: "수업료", value: formatCurrencyOrDash(student.tuitionFee) },
+          { label: "등록일", value: formatDate(student.registrationDate) },
+          { label: "마지막 수강일", value: formatDate(student.lastClassDate) },
+          {
+            label: "수업 요일",
+            value:
+              Array.isArray(student.scheduleDays) && student.scheduleDays.length > 0
+                ? formatScheduleDaysWithTimes(student.scheduleDays, student.scheduleDayTimes)
+                : "-",
+            fullWidth: true,
+          },
+        ],
+      },
+      {
+        title: "학습 관리",
+        items: [
+          { label: "진도", value: student.progress, fullWidth: true, multiline: true },
+          { label: "숙제 관리", value: student.homework, fullWidth: true, multiline: true },
+        ],
+      },
+      {
+        title: "상태 / 비고",
+        items: [
+          { label: "상태", value: getStudentStatusLabel(student) },
+          { label: "퇴원 사유", value: student.leaveReason },
+          { label: "비고", value: student.notes, fullWidth: true, multiline: true },
+        ],
+      },
+    ];
+  }
+
+  function renderStudentDetailModalContent(student) {
+    const sections = getStudentDetailSections(student);
+    const latestClassLabel =
+      student.lastClassDate && String(student.lastClassDate).trim()
+        ? `마지막 수강 ${formatDate(student.lastClassDate)}`
+        : "마지막 수강일 미입력";
+
+    return `
+      <div class="student-detail-summary">
+        <div class="min-w-0">
+          <p class="student-detail-name">${escapeHtml(student.name || "학생명 미입력")}</p>
+          <p class="student-detail-meta">${escapeHtml(
+            [student.assignedInstructor || "담당 강사 미입력", student.contact || "연락처 미입력"].join(" · ")
+          )}</p>
+        </div>
+        <div class="student-detail-chip-row">
+          <span class="student-detail-chip ${student.isActive ? "is-active" : "is-inactive"}">
+            ${escapeHtml(getStudentStatusLabel(student))}
+          </span>
+          <span class="student-detail-chip">${escapeHtml(formatCountWithUnit(student.registeredSessions, "회 등록"))}</span>
+          <span class="student-detail-chip">${escapeHtml(latestClassLabel)}</span>
+        </div>
+      </div>
+      <div class="student-detail-sections">
+        ${sections
+          .map(
+            (section) => `
+          <section class="student-detail-section">
+            <h3 class="student-detail-section-title">${escapeHtml(section.title)}</h3>
+            <dl class="student-detail-grid">
+              ${section.items
+                .map((item) => {
+                  const value = item.value ? String(item.value) : "-";
+                  const valueClass = [
+                    "student-detail-value",
+                    item.multiline ? "is-multiline" : "",
+                    value === "-" ? "is-empty" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ");
+                  return `
+                    <div class="student-detail-field ${item.fullWidth ? "is-full" : ""}">
+                      <dt class="student-detail-label">${escapeHtml(item.label)}</dt>
+                      <dd class="${valueClass}">${escapeHtml(value)}</dd>
+                    </div>
+                  `;
+                })
+                .join("")}
+            </dl>
+          </section>
+        `
+          )
+          .join("")}
+      </div>
+    `;
+  }
+
+  function fillStudentDetailModal(student) {
+    const titleEl = document.getElementById("student-detail-modal-title");
+    const subtitleEl = document.getElementById("student-detail-modal-subtitle");
+    const bodyEl = document.getElementById("student-detail-modal-body");
+    if (!titleEl || !subtitleEl || !bodyEl) return;
+
+    titleEl.textContent = `${student.name || "학생"} 상세 정보`;
+    subtitleEl.textContent = "학생 관리에 입력된 정보를 읽기 전용으로 확인합니다. 수정은 목록의 수정 버튼에서 가능합니다.";
+    bodyEl.innerHTML = renderStudentDetailModalContent(student);
+    bodyEl.scrollTop = 0;
+  }
+
+  // 회차 관리 버튼을 누르면 보이는 확장 행
   function renderStudentExpandedRow(s) {
+    const sessionSlots = getStudentSessionSlots(s);
+    const completedCount = sessionSlots.filter((item) => item.isCompleted).length;
+    const remainingCount = Math.max(sessionSlots.length - completedCount, 0);
+    const activeSessionNumber = state.expandedSessionPanelByStudent[s.id] || null;
+    const activeSlot =
+      sessionSlots.find((item) => item.sessionNumber === activeSessionNumber) || null;
     const items = [
       { label: "지역", value: s.region },
       { label: "수업장소", value: s.location },
@@ -1371,20 +1732,192 @@
     ];
 
     return `
-      <tr class="student-row-detail md:hidden bg-slate-50/60" data-id="${escapeHtml(s.id)}">
-        <td colspan="5" class="px-4 py-4">
-          <dl class="grid grid-cols-1 gap-x-4 gap-y-2.5 sm:grid-cols-2">
-            ${items
-              .map(
-                (it) => `
-              <div class="flex items-start gap-3 text-sm">
-                <dt class="w-20 shrink-0 text-xs font-medium text-slate-500">${escapeHtml(it.label)}</dt>
-                <dd class="min-w-0 flex-1 break-words text-slate-800">${escapeHtml(it.value || "-")}</dd>
+      <tr class="student-row-detail bg-slate-50/60" data-id="${escapeHtml(s.id)}">
+        <td colspan="10" class="px-4 py-4 md:px-6">
+          <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)]">
+            <section class="student-inline-detail-panel rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div class="student-inline-detail-header mb-4 flex items-start justify-between gap-3">
+                <div>
+                  <p class="text-sm font-semibold text-slate-900">학생 상세</p>
+                  <p class="mt-1 text-xs text-slate-500">기본 정보와 수업 상태를 함께 확인하세요.</p>
+                </div>
+                <span class="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600">
+                  총 ${formatNumber(Number(s.registeredSessions) || 0)}회
+                </span>
               </div>
-            `
-              )
-              .join("")}
-          </dl>
+              <dl class="student-inline-detail-grid grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
+                ${items
+                  .map(
+                    (it) => `
+                  <div class="student-inline-detail-item flex items-start gap-3 text-sm">
+                    <dt class="student-inline-detail-label w-20 shrink-0 text-xs font-medium text-slate-500">${escapeHtml(it.label)}</dt>
+                    <dd class="student-inline-detail-value min-w-0 flex-1 break-words text-slate-800">${escapeHtml(
+                      it.value || "-"
+                    )}</dd>
+                  </div>
+                `
+                  )
+                  .join("")}
+              </dl>
+            </section>
+
+            <section class="session-manager-panel rounded-xl border border-brand-100 bg-white p-4 shadow-sm">
+              <div class="session-manager-toolbar mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p class="text-sm font-semibold text-slate-900">회차 관리</p>
+                  <p class="mt-1 text-xs text-slate-500">상단 회차 버튼을 눌러 각 회차의 진행일과 안내 문구를 관리하세요.</p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2.5 text-[11px]">
+                  <span class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700">
+                    완료 ${formatNumber(completedCount)}회
+                  </span>
+                  <span class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 font-medium text-amber-700">
+                    남음 ${formatNumber(remainingCount)}회
+                  </span>
+                </div>
+              </div>
+              ${
+                sessionSlots.length === 0
+                  ? `<div class="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                      등록 횟수를 먼저 입력하면 회차 체크가 활성화됩니다.
+                    </div>`
+                  : `
+                    <div class="session-tabs-wrap mb-4 flex flex-wrap gap-2.5">
+                      ${sessionSlots
+                        .map((slot) => {
+                          const isActive = activeSessionNumber === slot.sessionNumber;
+                          const tabStateClass = isActive
+                            ? slot.isCompleted
+                              ? "is-active is-complete"
+                              : "is-active border-brand-500 bg-brand-50 text-brand-700"
+                            : slot.isCompleted
+                              ? "is-complete"
+                              : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50";
+                          return `
+                            <button
+                              type="button"
+                              class="session-tab-button inline-flex items-center justify-center rounded-full border px-3 py-1.5 text-xs font-medium transition ${tabStateClass}"
+                              data-student-id="${escapeHtml(s.id)}"
+                              data-session-number="${slot.sessionNumber}"
+                            >
+                              <span>${formatNumber(slot.sessionNumber)}회차</span>
+                            </button>
+                          `;
+                        })
+                        .join("")}
+                    </div>
+                    ${
+                      activeSlot
+                        ? (() => {
+                            const messageText = buildSessionNotificationMessage(s, activeSlot);
+                            const hasMessage = !activeSlot.isCompleted && !!messageText;
+                            const scheduledSummary =
+                              activeSlot.sessionDate || activeSlot.startTime || activeSlot.endTime
+                                ? `${formatScheduledDateForMessage(activeSlot.sessionDate) || "날짜 미입력"}${
+                                    buildScheduledTimeRangeText(activeSlot.startTime, activeSlot.endTime)
+                                      ? ` ${buildScheduledTimeRangeText(activeSlot.startTime, activeSlot.endTime)}`
+                                      : ""
+                                  }`
+                                : "";
+                            return `<div class="session-progress-item session-detail-card rounded-lg border ${
+                              activeSlot.isCompleted
+                                ? "border-emerald-200 bg-emerald-50/60"
+                                : "border-slate-200 bg-slate-50/70"
+                            } p-4" data-student-id="${escapeHtml(s.id)}" data-session-number="${activeSlot.sessionNumber}">
+                              <div class="min-w-0">
+                                <div class="flex flex-wrap items-center gap-2">
+                                  <span class="text-sm font-semibold text-slate-900">${formatNumber(
+                                    activeSlot.sessionNumber
+                                  )}회차</span>
+                                  <label class="session-complete-toggle inline-flex cursor-pointer items-center gap-2 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700">
+                                    <input
+                                      type="checkbox"
+                                      class="session-progress-check h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                                      data-student-id="${escapeHtml(s.id)}"
+                                      data-session-number="${activeSlot.sessionNumber}"
+                                      ${activeSlot.isCompleted ? "checked" : ""}
+                                    />
+                                    완료
+                                  </label>
+                                </div>
+                                ${
+                                  scheduledSummary
+                                    ? `<p class="mt-2 text-[11px] leading-5 text-slate-500">${escapeHtml(
+                                        scheduledSummary
+                                      )}</p>`
+                                    : ""
+                                }
+                                </div>
+
+                                <div class="session-detail-fields mt-4 grid gap-3 sm:grid-cols-3">
+                                  <div>
+                                    <label class="mb-1.5 block text-[11px] font-medium text-slate-500">진행일</label>
+                                    <input
+                                      type="date"
+                                      class="session-date form-input text-sm"
+                                      data-student-id="${escapeHtml(s.id)}"
+                                      data-session-number="${activeSlot.sessionNumber}"
+                                      value="${escapeHtml(activeSlot.sessionDate)}"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label class="mb-1.5 block text-[11px] font-medium text-slate-500">시작 시간</label>
+                                    <input
+                                      type="time"
+                                      class="session-start-time form-input text-sm"
+                                      data-student-id="${escapeHtml(s.id)}"
+                                      data-session-number="${activeSlot.sessionNumber}"
+                                      value="${escapeHtml(activeSlot.startTime)}"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label class="mb-1.5 block text-[11px] font-medium text-slate-500">종료 시간</label>
+                                    <input
+                                      type="time"
+                                      class="session-end-time form-input text-sm"
+                                      data-student-id="${escapeHtml(s.id)}"
+                                      data-session-number="${activeSlot.sessionNumber}"
+                                      value="${escapeHtml(activeSlot.endTime)}"
+                                    />
+                                  </div>
+                                </div>
+
+                                <div class="session-message-box mt-4 rounded-lg border border-slate-200 bg-white/80 p-4">
+                                  <div class="flex items-center justify-between gap-2">
+                                    <p class="text-[11px] font-semibold text-slate-700">안내 문자</p>
+                                    <button
+                                      type="button"
+                                      class="session-copy-message inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                      data-student-id="${escapeHtml(s.id)}"
+                                      data-session-number="${activeSlot.sessionNumber}"
+                                      ${hasMessage ? "" : "disabled"}
+                                    >
+                                      <i class="fa-regular fa-copy"></i>
+                                      복사
+                                    </button>
+                                  </div>
+                                  ${
+                                    hasMessage
+                                      ? `<textarea
+                                          class="session-message-preview mt-2 min-h-[170px] w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-700"
+                                          readonly
+                                        >${escapeHtml(messageText)}</textarea>`
+                                      : `<p class="mt-2 text-[11px] leading-5 text-slate-500">
+                                          진행일과 시작/종료 시간을 입력하면 회차 안내 문구가 자동으로 완성됩니다.
+                                        </p>`
+                                  }
+                                </div>
+                              </div>
+                            </div>`;
+                          })()
+                        : `<div class="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                            위 회차 버튼을 누르면 해당 회차의 관리 영역이 열립니다.
+                          </div>`
+                    }
+                  `
+              }
+            </section>
+          </div>
         </td>
       </tr>
     `;
@@ -1869,15 +2402,86 @@
       });
     });
 
+    document.querySelectorAll(".action-sessions").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleExpandedRow(btn.dataset.id);
+      });
+    });
+
+    document.querySelectorAll(".session-tab-button").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleSessionDetail(btn.dataset.studentId, Number(btn.dataset.sessionNumber));
+      });
+    });
+
+    document.querySelectorAll(".session-date, .session-start-time, .session-end-time").forEach((input) => {
+      input.addEventListener("change", () => {
+        const sessionItem = input.closest(".session-progress-item");
+        if (!sessionItem) return;
+        const dateInput = sessionItem.querySelector(".session-date");
+        const startTimeInput = sessionItem.querySelector(".session-start-time");
+        const endTimeInput = sessionItem.querySelector(".session-end-time");
+        saveStudentSessionRecord(input.dataset.studentId, Number(input.dataset.sessionNumber), {
+          sessionDate: dateInput ? String(dateInput.value || "").trim() : "",
+          startTime: startTimeInput ? String(startTimeInput.value || "").trim() : "",
+          endTime: endTimeInput ? String(endTimeInput.value || "").trim() : "",
+        });
+      });
+    });
+
+    document.querySelectorAll(".session-progress-check").forEach((input) => {
+      input.addEventListener("change", () => {
+        const sessionItem = input.closest(".session-progress-item");
+        const dateInput = sessionItem?.querySelector(".session-date");
+        if (!dateInput) return;
+
+        if (input.checked) {
+          if (!dateInput.value) dateInput.value = todayISO();
+        }
+
+        saveStudentSessionRecord(
+          input.dataset.studentId,
+          Number(input.dataset.sessionNumber),
+          {
+            sessionDate: String(dateInput.value || "").trim(),
+            isCompleted: !!input.checked,
+          }
+        );
+      });
+    });
+
+    document.querySelectorAll(".session-copy-message").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const student = state.students.find((item) => item.id === btn.dataset.studentId);
+        if (!student) {
+          showToast("학생 정보를 찾을 수 없습니다.");
+          return;
+        }
+        const slot = getStudentSessionSlots(student).find(
+          (item) => item.sessionNumber === Number(btn.dataset.sessionNumber)
+        );
+        const message = buildSessionNotificationMessage(student, slot);
+        if (!message) {
+          showToast("예정일과 시작/종료 시간을 먼저 입력해 주세요.");
+          return;
+        }
+        try {
+          await navigator.clipboard.writeText(message);
+          showToast(`${student.name} 학생의 안내 문구를 복사했습니다.`);
+        } catch (err) {
+          console.error("[session-copy-message]", err);
+          showToast("문구 복사에 실패했습니다. 다시 시도해 주세요.");
+        }
+      });
+    });
+
     document.querySelectorAll(".student-row").forEach((row) => {
       row.addEventListener("click", () => {
         const id = row.dataset.id;
-        // 모바일: 인라인 확장 토글 / 데스크탑: 수정 모달 열기
-        if (isMobileViewport()) {
-          toggleExpandedRow(id);
-        } else {
-          openStudentModal(id);
-        }
+        openStudentDetailModal(id);
       });
     });
   }
@@ -1886,6 +2490,7 @@
     if (!id) return;
     if (state.expandedRowIds.has(id)) {
       state.expandedRowIds.delete(id);
+      delete state.expandedSessionPanelByStudent[id];
     } else {
       state.expandedRowIds.add(id);
     }
@@ -1943,6 +2548,49 @@
     modal.style.setProperty("display", "none", "important");
     document.body.style.overflow = "";
     state.editingId = null;
+  }
+
+  function openStudentDetailModal(id) {
+    const modal = document.getElementById("student-detail-modal");
+    if (!modal) return;
+
+    const student = state.students.find((it) => it.id === id);
+    if (!student) {
+      showToast("학생 정보를 찾을 수 없습니다.");
+      return;
+    }
+
+    state.detailStudentId = id;
+    fillStudentDetailModal(student);
+    modal.removeAttribute("hidden");
+    modal.style.removeProperty("display");
+    modal.classList.remove("hidden");
+    modal.classList.add("modal-open");
+    document.body.style.overflow = "hidden";
+  }
+
+  function closeStudentDetailModal() {
+    const modal = document.getElementById("student-detail-modal");
+    if (!modal) return;
+    modal.classList.remove("modal-open");
+    modal.classList.add("hidden");
+    modal.setAttribute("hidden", "");
+    modal.style.setProperty("display", "none", "important");
+    document.body.style.overflow = "";
+    state.detailStudentId = null;
+  }
+
+  function syncStudentDetailModal() {
+    const modal = document.getElementById("student-detail-modal");
+    if (!modal || !modal.classList.contains("modal-open") || !state.detailStudentId) return;
+
+    const student = state.students.find((it) => it.id === state.detailStudentId);
+    if (!student) {
+      closeStudentDetailModal();
+      return;
+    }
+
+    fillStudentDetailModal(student);
   }
 
   function resetForm(form) {
@@ -2391,10 +3039,18 @@
     unsubscribeAuth = window.HaotingDB.subscribeAuthState((fbUser) => {
       state.currentUser = fbUser ? mapFirebaseUser(fbUser) : null;
       if (state.currentUser) {
+        state.isStudentsLoading = true;
+        state.isCounselingLoading = true;
         applyUserToShell();
         showApp();
+        initData();
         navigate("students");
       } else {
+        clearDataSubscriptions();
+        state.students = [];
+        state.counselingRecords = [];
+        state.isStudentsLoading = false;
+        state.isCounselingLoading = false;
         showLogin();
       }
     });
@@ -2596,6 +3252,10 @@
       btn.addEventListener("click", closeStudentModal);
     });
 
+    document.querySelectorAll("#student-detail-modal .student-detail-close").forEach((btn) => {
+      btn.addEventListener("click", closeStudentDetailModal);
+    });
+
     // 학생 모달 백드롭 클릭으로 닫기
     const studentModal = document.getElementById("student-modal");
     if (studentModal) {
@@ -2604,10 +3264,21 @@
       });
     }
 
+    const studentDetailModal = document.getElementById("student-detail-modal");
+    if (studentDetailModal) {
+      studentDetailModal.addEventListener("click", (e) => {
+        if (e.target === studentDetailModal) closeStudentDetailModal();
+      });
+    }
+
     // ESC 키로 모달 닫기
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
-      // 우선순위: 학생 모달 → 모바일 사이드바
+      // 우선순위: 학생 상세 모달 → 학생 수정 모달 → 모바일 사이드바
+      if (document.getElementById("student-detail-modal")?.classList.contains("modal-open")) {
+        closeStudentDetailModal();
+        return;
+      }
       if (document.getElementById("student-modal")?.classList.contains("modal-open")) {
         closeStudentModal();
         return;
@@ -2709,7 +3380,10 @@
 
     // Firestore + Auth 는 firebase.js 모듈 로딩 후에만 사용 가능합니다.
     whenDBReady(() => {
-      initData();
+      if (!isDBReady()) {
+        initData();
+        return;
+      }
       wireFirebaseAuthListener();
     });
 
