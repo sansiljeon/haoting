@@ -148,6 +148,9 @@ service cloud.firestore {
     match /students/{doc} {
       allow read, write: if true;
     }
+    match /counselingRecords/{doc} {
+      allow read, write: if true;
+    }
   }
 }
 ```
@@ -163,6 +166,9 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{db}/documents {
     match /students/{doc} {
+      allow read, write: if request.auth != null;
+    }
+    match /counselingRecords/{doc} {
       allow read, write: if request.auth != null;
     }
   }
@@ -213,6 +219,7 @@ npx --yes serve .
 | 위치 | 키 | 설명 |
 | --- | --- | --- |
 | Firestore 콘솔 | `students` 컬렉션 | 학생 데이터 (수동 삭제 시 다음 접속에서 더미 재시드) |
+| Firestore 콘솔 | `counselingRecords` 컬렉션 | 학생별 상담 기록 (상담일·내용) |
 | 브라우저 Local Storage | `haoting:students:v1` | 이전 버전 잔존 데이터 (마이그레이션 후 사용 안 함, 수동 삭제 가능) |
 
 로그인 세션은 **Firebase Authentication** 이 관리합니다(브라우저 IndexedDB 등).

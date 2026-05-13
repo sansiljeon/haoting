@@ -192,6 +192,14 @@
             <i class="fa-solid fa-chart-line w-5 text-center text-slate-400 group-[.active]:text-brand-600"></i>
             <span>매출 관리</span>
           </button>
+          <button
+            type="button"
+            data-route="counseling"
+            class="nav-item group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+          >
+            <i class="fa-solid fa-comments w-5 text-center text-slate-400 group-[.active]:text-brand-600"></i>
+            <span>상담기록</span>
+          </button>
         </nav>
 
         <div class="border-t border-slate-200 p-4">
@@ -469,6 +477,18 @@
               <div id="f-schedule-days" class="flex flex-wrap gap-2">
                 <!-- 요일 체크박스는 JS 가 초기화 시 주입합니다. -->
               </div>
+              <div
+                id="f-schedule-day-times-wrap"
+                class="schedule-day-times-panel mt-3 hidden"
+              >
+                <div class="schedule-day-times-head">
+                  <p class="schedule-day-times-title">선택한 요일별 수업 시간</p>
+                  <p class="schedule-day-times-desc">
+                    체크한 요일만 나열됩니다. 비워 두면 해당 요일은 시간 미정으로 저장됩니다.
+                  </p>
+                </div>
+                <div id="f-schedule-day-times-rows" class="schedule-day-times-rows"></div>
+              </div>
             </div>
 
             <div class="md:col-span-2">
@@ -659,7 +679,7 @@
     <!--
       로딩 순서:
       1) firebase-config.js    : window.HAOTING_FIREBASE_CONFIG
-      2) firebase.js (module)    : Firestore + Auth → window.HaotingDB
+      2) firebase.js (module)    : Firestore + Auth → window.HaotingDB (students, counselingRecords)
       3) app.js (defer)
     -->
     <script src="./firebase-config.js"></script>

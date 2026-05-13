@@ -65,10 +65,49 @@
     return err && err.message ? String(err.message) : "로그인에 실패했습니다.";
   }
 
+  /** 수강생 상담 기록지 양식 — Firestore `counselingRecords` 필드와 동일 키 */
+  function emptyCounselingDraft() {
+    return {
+      id: null,
+      studentId: "",
+      date: "",
+      assignedInstructor: "",
+      recordName: "",
+      recordContact: "",
+      recordRegion: "",
+      classFormat: "",
+      chBanner: false,
+      chInternet: false,
+      chReferral: false,
+      chReferralName: "",
+      chOther: false,
+      chOtherDetail: "",
+      learningExperience: "",
+      enrollmentPurpose: "",
+      intConversation: false,
+      intCertification: false,
+      intEmployment: false,
+      intTravel: false,
+      intRemind: false,
+      intMaintain: false,
+      intOther: false,
+      intOtherDetail: "",
+      goalWithPeriod: "",
+      availableTimes: "",
+      specialNotes: "",
+    };
+  }
+
   const state = {
-    route: "students", // "students" | "sales"
+    route: "students", // "counseling" | "students" | "sales"
     students: [],
     isStudentsLoading: true, // Firestore 첫 스냅샷 도착 전까지 true
+    counselingRecords: [],
+    isCounselingLoading: true,
+    /** 목록 필터: 빈 문자열이면 전체 학생 */
+    counselingListFilterStudentId: "",
+    /** 상단 작성/수정 폼 (수강생 상담 기록지 필드) */
+    counselingDraft: emptyCounselingDraft(),
     filter: "all", // "all" | "active"
     keyword: "",
     editingId: null, // 모달이 수정 모드일 때의 학생 id
@@ -80,10 +119,12 @@
 
   // Firestore 구독 해제 함수. 여러 번 구독되지 않도록 한 곳에서 보관합니다.
   let unsubscribeStudents = null;
+  let unsubscribeCounselingRecords = null;
   let unsubscribeAuth = null;
   let authListenerWired = false;
   /** 학생 폼 저장 중 중복 제출 방지 */
   let studentFormSubmitting = false;
+  let counselingFormSubmitting = false;
 
   /* ==========================================================
    * 2. 더미 데이터
@@ -111,6 +152,7 @@
       progress: "Lesson 8 / 12 진행 중. 발음 교정 단계.",
       homework: "Lesson 8 단어 50개 암기, 본문 낭독 녹음 제출",
       scheduleDays: ["화", "목"],
+      scheduleDayTimes: { "화": "19:00", "목": "19:00" },
     },
     {
       id: "stu-0002",
@@ -132,6 +174,7 @@
       progress: "독해 정답률 72%, 듣기 64%. 모의고사 2회 완료.",
       homework: "기출 듣기 PART 2 풀이, 빈출 어휘 100개 정리",
       scheduleDays: ["월", "수", "토"],
+      scheduleDayTimes: { "월": "18:30", "수": "18:30", "토": "10:00" },
     },
     {
       id: "stu-0003",
@@ -163,12 +206,141 @@
    *    - app.js 는 Firebase SDK 를 직접 import 하지 않고 window.HaotingDB 만 호출합니다.
    * ========================================================== */
 
+  /** Firestore 에 저장되는 요일→시간 맵 (키: "월"~"일", 값: "HH:MM") */
+  function normalizeScheduleDayTimesMap(raw) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    const out = {};
+    SCHEDULE_DAY_DISPLAY_ORDER.forEach((d) => {
+      const v = raw[d];
+      if (v != null && String(v).trim()) out[d] = String(v).trim();
+    });
+    return out;
+  }
+
   // 신규/이전 버전 호환을 위해 누락된 필드를 안전한 기본값으로 채워 줍니다.
   function normalizeStudent(s) {
     if (!s || typeof s !== "object") return s;
     return Object.assign({}, s, {
       scheduleDays: Array.isArray(s.scheduleDays) ? s.scheduleDays : [],
+      scheduleDayTimes: normalizeScheduleDayTimesMap(s.scheduleDayTimes),
     });
+  }
+
+  function formatScheduleDaysWithTimes(days, times) {
+    if (!Array.isArray(days) || days.length === 0) return "-";
+    const t = times && typeof times === "object" && !Array.isArray(times) ? times : {};
+    return days
+      .map((d) => {
+        const dayStr = String(d);
+        const timeStr = t[dayStr] ? String(t[dayStr]).trim() : "";
+        return timeStr ? `${dayStr} ${timeStr}` : dayStr;
+      })
+      .join(" · ");
+  }
+
+  function normalizeCounselingRecord(r) {
+    if (!r || typeof r !== "object") return r;
+    const legacyContent = String(r.content || "").trim();
+    const specialRaw = String(r.specialNotes || "").trim();
+    return Object.assign({}, r, {
+      studentId: String(r.studentId || "").trim(),
+      counselingDate: String(r.counselingDate || "").trim(),
+      assignedInstructor: String(r.assignedInstructor || "").trim(),
+      recordName: String(r.recordName || "").trim(),
+      recordContact: String(r.recordContact || "").trim(),
+      recordRegion: String(r.recordRegion || "").trim(),
+      classFormat: String(r.classFormat || "").trim(),
+      chBanner: !!r.chBanner,
+      chInternet: !!r.chInternet,
+      chReferral: !!r.chReferral,
+      chReferralName: String(r.chReferralName || "").trim(),
+      chOther: !!r.chOther,
+      chOtherDetail: String(r.chOtherDetail || "").trim(),
+      learningExperience: String(r.learningExperience || "").trim(),
+      enrollmentPurpose: String(r.enrollmentPurpose || "").trim(),
+      intConversation: !!r.intConversation,
+      intCertification: !!r.intCertification,
+      intEmployment: !!r.intEmployment,
+      intTravel: !!r.intTravel,
+      intRemind: !!r.intRemind,
+      intMaintain: !!r.intMaintain,
+      intOther: !!r.intOther,
+      intOtherDetail: String(r.intOtherDetail || "").trim(),
+      goalWithPeriod: String(r.goalWithPeriod || "").trim(),
+      availableTimes: String(r.availableTimes || "").trim(),
+      specialNotes: specialRaw || legacyContent,
+      content: legacyContent || specialRaw,
+    });
+  }
+
+  function counselingRecordToDraft(rec) {
+    const d = emptyCounselingDraft();
+    if (!rec) return d;
+    const n = normalizeCounselingRecord(rec);
+    return Object.assign(d, {
+      id: n.id,
+      studentId: n.studentId,
+      date: n.counselingDate || todayISO(),
+      assignedInstructor: n.assignedInstructor,
+      recordName: n.recordName,
+      recordContact: n.recordContact,
+      recordRegion: n.recordRegion,
+      classFormat: n.classFormat,
+      chBanner: n.chBanner,
+      chInternet: n.chInternet,
+      chReferral: n.chReferral,
+      chReferralName: n.chReferralName,
+      chOther: n.chOther,
+      chOtherDetail: n.chOtherDetail,
+      learningExperience: n.learningExperience,
+      enrollmentPurpose: n.enrollmentPurpose,
+      intConversation: n.intConversation,
+      intCertification: n.intCertification,
+      intEmployment: n.intEmployment,
+      intTravel: n.intTravel,
+      intRemind: n.intRemind,
+      intMaintain: n.intMaintain,
+      intOther: n.intOther,
+      intOtherDetail: n.intOtherDetail,
+      goalWithPeriod: n.goalWithPeriod,
+      availableTimes: n.availableTimes,
+      specialNotes: n.specialNotes,
+    });
+  }
+
+  function getCounselingListPreview(rec) {
+    if (!rec) return "";
+    const n = normalizeCounselingRecord(rec);
+    const chunks = [
+      n.enrollmentPurpose,
+      n.learningExperience,
+      n.goalWithPeriod,
+      n.specialNotes,
+    ]
+      .map((s) => String(s || "").trim())
+      .filter(Boolean);
+    const text = chunks.join(" · ") || String(n.content || "").trim();
+    return text.length > 140 ? `${text.slice(0, 140)}…` : text;
+  }
+
+  function applyStudentDataToCounselingDraft(studentId) {
+    const st = state.students.find((s) => s.id === studentId);
+    if (!st) return;
+    state.counselingDraft.recordName = String(st.name || "").trim();
+    state.counselingDraft.recordContact = String(st.contact || "").trim();
+    state.counselingDraft.recordRegion = String(st.region || "").trim();
+    state.counselingDraft.assignedInstructor = String(st.assignedInstructor || "").trim();
+  }
+
+  function getStudentNameById(studentId) {
+    const s = state.students.find((it) => it.id === studentId);
+    return s && s.name ? String(s.name) : null;
+  }
+
+  function sortedStudentsByName() {
+    return [...state.students].sort((a, b) =>
+      String(a.name || "").localeCompare(String(b.name || ""), "ko")
+    );
   }
 
   // Firestore 의 students 컬렉션을 실시간 구독합니다. 변경이 생기면 곧바로 화면이 갱신됩니다.
@@ -198,6 +370,29 @@
     });
   }
 
+  function subscribeToCounselingRecords() {
+    if (!isDBReady() || typeof window.HaotingDB.subscribeCounselingRecords !== "function") {
+      state.isCounselingLoading = false;
+      return;
+    }
+    if (unsubscribeCounselingRecords) {
+      unsubscribeCounselingRecords();
+      unsubscribeCounselingRecords = null;
+    }
+    state.isCounselingLoading = true;
+    unsubscribeCounselingRecords = window.HaotingDB.subscribeCounselingRecords((items, err) => {
+      if (err) {
+        showToast("상담 기록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.");
+        state.isCounselingLoading = false;
+        render();
+        return;
+      }
+      state.counselingRecords = (items || []).map(normalizeCounselingRecord);
+      state.isCounselingLoading = false;
+      render();
+    });
+  }
+
   async function createStudent(draft) {
     if (!isDBReady()) throw new Error("Firestore 가 준비되지 않았습니다.");
     return window.HaotingDB.createStudent(draft);
@@ -211,6 +406,21 @@
   async function deleteStudent(id) {
     if (!isDBReady()) throw new Error("Firestore 가 준비되지 않았습니다.");
     return window.HaotingDB.deleteStudent(id);
+  }
+
+  async function createCounselingRecord(draft) {
+    if (!isDBReady()) throw new Error("Firestore 가 준비되지 않았습니다.");
+    return window.HaotingDB.createCounselingRecord(draft);
+  }
+
+  async function updateCounselingRecord(id, draft) {
+    if (!isDBReady()) throw new Error("Firestore 가 준비되지 않았습니다.");
+    return window.HaotingDB.updateCounselingRecord(id, draft);
+  }
+
+  async function deleteCounselingRecord(id) {
+    if (!isDBReady()) throw new Error("Firestore 가 준비되지 않았습니다.");
+    return window.HaotingDB.deleteCounselingRecord(id);
   }
 
   /**
@@ -413,6 +623,9 @@
     } else if (state.route === "sales") {
       main.innerHTML = renderSalesView();
       bindSalesViewEvents();
+    } else if (state.route === "counseling") {
+      main.innerHTML = renderCounselingView();
+      bindCounselingViewEvents();
     }
   }
 
@@ -423,6 +636,469 @@
         state.salesFilter = e.target.checked ? "active" : "all";
         render();
       });
+    }
+  }
+
+  /* ----------------------------------------------------------
+   * 5-3. 상담기록 (학생별 상담 내용 CRUD)
+   * ---------------------------------------------------------- */
+  function renderCounselingView() {
+    const d = state.counselingDraft;
+    const draftDate = d.date || todayISO();
+    const draftStudentId = d.studentId || "";
+    const isEditing = !!d.id;
+
+    const studentsSorted = sortedStudentsByName();
+    const studentOptionsHtml = [
+      `<option value="" disabled ${!draftStudentId ? "selected" : ""}>학생을 선택하세요</option>`,
+      ...studentsSorted.map((s) => {
+        const sel = s.id === draftStudentId ? " selected" : "";
+        return `<option value="${escapeHtml(s.id)}"${sel}>${escapeHtml(s.name || s.id)}</option>`;
+      }),
+    ].join("");
+
+    const filterVal = state.counselingListFilterStudentId || "";
+    const filterOptionsHtml = [
+      `<option value="">전체 학생</option>`,
+      ...studentsSorted.map((s) => {
+        const sel = s.id === filterVal ? " selected" : "";
+        return `<option value="${escapeHtml(s.id)}"${sel}>${escapeHtml(s.name || s.id)}</option>`;
+      }),
+    ].join("");
+
+    let listRecords = state.counselingRecords.slice();
+    if (filterVal) {
+      listRecords = listRecords.filter((r) => r.studentId === filterVal);
+    }
+
+    const fmt = (v) => (d.classFormat === v ? " checked" : "");
+    const ichk = (flag) => (d[flag] ? " checked" : "");
+
+    const rowsHtml =
+      state.isCounselingLoading
+        ? `<tr><td colspan="4" class="px-4 py-12 text-center text-sm text-slate-500">
+            <i class="fa-solid fa-rotate fa-spin mr-2"></i>불러오는 중…
+          </td></tr>`
+        : listRecords.length === 0
+          ? `<tr><td colspan="4" class="px-4 py-12 text-center text-sm text-slate-500">
+              등록된 상담 기록이 없습니다. 아래에서 새로 추가해 보세요.
+            </td></tr>`
+          : listRecords
+              .map((r) => {
+                const n = normalizeCounselingRecord(r);
+                const name = n.recordName || getStudentNameById(r.studentId);
+                const nameCell = name
+                  ? escapeHtml(name)
+                  : `<span class="text-amber-600">${escapeHtml(r.studentId || "-")}</span>
+                     <span class="ml-1 text-[11px] text-slate-400">(학생 목록에 없음)</span>`;
+                const preview = escapeHtml(getCounselingListPreview(n));
+                const tip = escapeHtml(
+                  [n.enrollmentPurpose, n.specialNotes].filter(Boolean).join("\n") || getCounselingListPreview(n)
+                );
+                return `
+              <tr class="counseling-row" data-counseling-id="${escapeHtml(r.id)}">
+                <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-600 md:px-6">${formatDate(
+                  n.counselingDate
+                )}</td>
+                <td class="px-4 py-3 text-sm font-medium text-slate-900 md:px-6">${nameCell}</td>
+                <td class="max-w-md px-4 py-3 text-sm text-slate-700 md:px-6">
+                  <p class="line-clamp-2 break-words" title="${tip}">${preview || "—"}</p>
+                </td>
+                <td class="whitespace-nowrap px-4 py-3 text-right md:px-6">
+                  <button type="button" class="counseling-edit inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-brand-600" data-id="${escapeHtml(r.id)}" title="수정" aria-label="수정">
+                    <i class="fa-solid fa-pen-to-square"></i>
+                  </button>
+                  <button type="button" class="counseling-delete inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600" data-id="${escapeHtml(r.id)}" title="삭제" aria-label="삭제">
+                    <i class="fa-solid fa-trash"></i>
+                  </button>
+                </td>
+              </tr>`;
+              })
+              .join("");
+
+    const noStudentsBlock =
+      !state.isStudentsLoading && state.students.length === 0
+        ? `<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            등록된 학생이 없습니다. <strong>학생 관리</strong>에서 학생을 먼저 추가한 뒤 상담 기록을 남길 수 있습니다.
+          </div>`
+        : "";
+
+    return `
+      <section class="mb-6 flex flex-col gap-1 md:flex-row md:items-end md:justify-between">
+        <div>
+          <h2 class="text-xl font-semibold text-slate-900 md:text-2xl">상담기록</h2>
+          <p class="mt-1 text-sm text-slate-500">
+            수강생 상담 기록지 양식으로 입력한 내용이 저장되며, 목록에서 수정·삭제할 수 있습니다.
+          </p>
+        </div>
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <label class="sr-only" for="counseling-list-filter">목록 학생 필터</label>
+          <select id="counseling-list-filter" class="form-input min-w-[200px] text-sm">
+            ${filterOptionsHtml}
+          </select>
+        </div>
+      </section>
+
+      <section class="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-6">
+        <p class="mb-3 text-xs font-medium text-slate-500">${isEditing ? "기록 수정" : "새 기록"}</p>
+        ${noStudentsBlock}
+        <form id="counseling-form" class="counseling-form-wrap" novalidate>
+          <div class="counseling-sheet">
+            <header class="counseling-sheet-header">
+              <div class="counseling-sheet-header-left">
+                <p class="counseling-sheet-brand">하오팅 중국어</p>
+                <p class="counseling-sheet-instructor-line">
+                  <span class="counseling-sheet-instructor-label">담당 강사</span>
+                  <input
+                    type="text"
+                    name="assignedInstructor"
+                    class="counseling-sheet-instructor-input"
+                    value="${escapeHtml(d.assignedInstructor)}"
+                    placeholder="이름"
+                    autocomplete="off"
+                  />
+                </p>
+              </div>
+              <div class="counseling-sheet-header-center">
+                <h3 class="counseling-sheet-title">수강생 상담 기록지</h3>
+              </div>
+              <div class="counseling-sheet-header-right">
+                <span class="counseling-sheet-logo-ring" aria-hidden="true">
+                  <img
+                    src="./assets/logo.jpg"
+                    alt=""
+                    class="counseling-sheet-logo-img"
+                    style="filter: url(#logo-drop-black)"
+                  />
+                </span>
+              </div>
+            </header>
+
+            <div class="counseling-sheet-date-bar">
+              <label class="counseling-sheet-date-label" for="counseling-date">상담 날짜</label>
+              <input id="counseling-date" name="counselingDate" type="date" required class="counseling-sheet-date-input" value="${escapeHtml(draftDate)}" />
+            </div>
+
+            <div class="counseling-sheet-link-student">
+              <label class="counseling-mini-label" for="counseling-student">관리 목록 학생<span class="req">*</span></label>
+              <select id="counseling-student" name="studentId" required class="form-input max-w-md text-sm" ${
+                state.students.length === 0 ? "disabled" : ""
+              }>
+                ${studentOptionsHtml}
+              </select>
+              <p class="counseling-sheet-hint">선택 시 이름·연락처·지역·담당 강사가 01 항목에 자동으로 채워집니다. 필요하면 수정하세요.</p>
+            </div>
+
+            <div class="counseling-section">
+              <div class="counseling-section-bar">
+                <span class="counseling-section-num">01</span>
+                <span class="counseling-section-title">상담 수강생 정보</span>
+              </div>
+              <div class="counseling-s01-grid">
+                <div class="counseling-field">
+                  <label class="counseling-cell-label" for="cf-record-name">이름</label>
+                  <input id="cf-record-name" name="recordName" type="text" class="form-input" value="${escapeHtml(d.recordName)}" />
+                </div>
+                <div class="counseling-field">
+                  <label class="counseling-cell-label" for="cf-record-contact">연락처</label>
+                  <input id="cf-record-contact" name="recordContact" type="text" class="form-input" value="${escapeHtml(d.recordContact)}" inputmode="tel" />
+                </div>
+                <div class="counseling-field counseling-field-span2">
+                  <span class="counseling-cell-label">희망 수업 방식</span>
+                  <div class="counseling-radio-row">
+                    <label class="counseling-inline"><input type="radio" name="classFormat" value="1:1"${fmt("1:1")} /> 1:1</label>
+                    <label class="counseling-inline"><input type="radio" name="classFormat" value="소규모"${fmt("소규모")} /> 소규모</label>
+                    <label class="counseling-inline"><input type="radio" name="classFormat" value="온라인"${fmt("온라인")} /> 온라인</label>
+                    <label class="counseling-inline"><input type="radio" name="classFormat" value="방문"${fmt("방문")} /> 방문</label>
+                  </div>
+                </div>
+                <div class="counseling-field counseling-field-span2">
+                  <label class="counseling-cell-label" for="cf-record-region">지역</label>
+                  <input id="cf-record-region" name="recordRegion" type="text" class="form-input" value="${escapeHtml(d.recordRegion)}" />
+                </div>
+              </div>
+            </div>
+
+            <div class="counseling-section">
+              <div class="counseling-section-bar">
+                <span class="counseling-section-num">02</span>
+                <span class="counseling-section-title">상담 요청 경로</span>
+              </div>
+              <div class="counseling-ch-row counseling-ch-row-wrap">
+                <label class="counseling-inline"><input type="checkbox" name="chBanner" value="1"${ichk("chBanner")} /> 현수막 / 전단지</label>
+                <label class="counseling-inline"><input type="checkbox" name="chInternet" value="1"${ichk("chInternet")} /> 인터넷 서칭</label>
+                <label class="counseling-inline counseling-ch-grow">
+                  <input type="checkbox" name="chReferral" value="1"${ichk("chReferral")} /> 지인 소개
+                  <input type="text" name="chReferralName" class="counseling-line-input" value="${escapeHtml(d.chReferralName)}" placeholder="소개자" />
+                </label>
+                <label class="counseling-inline counseling-ch-grow">
+                  <input type="checkbox" name="chOther" value="1"${ichk("chOther")} /> 기타
+                  <input type="text" name="chOtherDetail" class="counseling-line-input counseling-line-input-wide" value="${escapeHtml(d.chOtherDetail)}" placeholder="내용" />
+                </label>
+              </div>
+            </div>
+
+            <div class="counseling-section">
+              <div class="counseling-section-bar">
+                <span class="counseling-section-num">03</span>
+                <span class="counseling-section-title">상담 개요</span>
+              </div>
+              <table class="counseling-overview-table" aria-label="상담 개요">
+                <tbody>
+                  <tr>
+                    <th scope="row">학습 경험<br /><span class="counseling-th-sub">(현재 실력)</span></th>
+                    <td><textarea name="learningExperience" class="form-input counseling-textarea" rows="3">${escapeHtml(d.learningExperience)}</textarea></td>
+                  </tr>
+                  <tr>
+                    <th scope="row">수강 목적</th>
+                    <td><textarea name="enrollmentPurpose" class="form-input counseling-textarea" rows="3">${escapeHtml(d.enrollmentPurpose)}</textarea></td>
+                  </tr>
+                  <tr>
+                    <th scope="row">관심 분야</th>
+                    <td>
+                      <p class="counseling-interest-hint">회화 · 자격증 · 취업 · 여행 · 리마인드 · 감각유지 · 기타 중 해당 항목을 선택하세요.</p>
+                      <div class="counseling-ch-row counseling-ch-row-wrap">
+                        <label class="counseling-inline"><input type="checkbox" name="intConversation" value="1"${ichk("intConversation")} /> 회화</label>
+                        <label class="counseling-inline"><input type="checkbox" name="intCertification" value="1"${ichk("intCertification")} /> 자격증</label>
+                        <label class="counseling-inline"><input type="checkbox" name="intEmployment" value="1"${ichk("intEmployment")} /> 취업</label>
+                        <label class="counseling-inline"><input type="checkbox" name="intTravel" value="1"${ichk("intTravel")} /> 여행</label>
+                        <label class="counseling-inline"><input type="checkbox" name="intRemind" value="1"${ichk("intRemind")} /> 리마인드</label>
+                        <label class="counseling-inline"><input type="checkbox" name="intMaintain" value="1"${ichk("intMaintain")} /> 감각유지</label>
+                        <label class="counseling-inline counseling-ch-grow">
+                          <input type="checkbox" name="intOther" value="1"${ichk("intOther")} /> 기타
+                          <input type="text" name="intOtherDetail" class="counseling-line-input counseling-line-input-wide" value="${escapeHtml(d.intOtherDetail)}" placeholder="내용" />
+                        </label>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <th scope="row">수강 목표<br /><span class="counseling-th-sub">(목표 기간)</span></th>
+                    <td><textarea name="goalWithPeriod" class="form-input counseling-textarea" rows="2">${escapeHtml(d.goalWithPeriod)}</textarea></td>
+                  </tr>
+                  <tr>
+                    <th scope="row">가능 수업 시간대</th>
+                    <td><textarea name="availableTimes" class="form-input counseling-textarea" rows="2">${escapeHtml(d.availableTimes)}</textarea></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="counseling-section">
+              <div class="counseling-section-bar">
+                <span class="counseling-section-num">04</span>
+                <span class="counseling-section-title">기타 특이사항</span>
+              </div>
+              <textarea name="specialNotes" class="form-input counseling-textarea counseling-textarea-tall" rows="4" placeholder="추가로 남길 내용을 입력하세요.">${escapeHtml(d.specialNotes)}</textarea>
+            </div>
+
+            <p class="counseling-sheet-footer">하오팅 중국어 상담일지</p>
+          </div>
+
+          <div class="counseling-form-actions">
+            ${
+              isEditing
+                ? `<button type="button" id="counseling-cancel-edit" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50">
+                    수정 취소
+                  </button>`
+                : ""
+            }
+            <button type="submit" id="counseling-submit" class="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700">
+              <i class="fa-solid fa-floppy-disk"></i>
+              <span id="counseling-submit-label">${isEditing ? "변경 저장" : "기록 저장"}</span>
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div class="border-b border-slate-200 px-4 py-4 md:px-6">
+          <h3 class="text-base font-semibold text-slate-900">상담 기록 목록</h3>
+          <p class="mt-0.5 text-xs text-slate-500">최신 상담일 순 · ${formatNumber(listRecords.length)}건 표시</p>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <thead class="bg-slate-50">
+              <tr class="text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
+                <th class="whitespace-nowrap px-4 py-3 md:px-6">상담일</th>
+                <th class="whitespace-nowrap px-4 py-3 md:px-6">이름</th>
+                <th class="px-4 py-3 md:px-6">요약</th>
+                <th class="whitespace-nowrap px-4 py-3 text-right md:px-6"><span class="sr-only">작업</span></th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 bg-white">
+              ${rowsHtml}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    `;
+  }
+
+  function bindCounselingViewEvents() {
+    const filterSel = document.getElementById("counseling-list-filter");
+    if (filterSel) {
+      filterSel.addEventListener("change", () => {
+        state.counselingListFilterStudentId = String(filterSel.value || "");
+        render();
+      });
+    }
+
+    const stSel = document.getElementById("counseling-student");
+    if (stSel) {
+      stSel.addEventListener("change", () => {
+        state.counselingDraft.studentId = String(stSel.value || "").trim();
+        applyStudentDataToCounselingDraft(state.counselingDraft.studentId);
+        render();
+      });
+    }
+
+    const cancelBtn = document.getElementById("counseling-cancel-edit");
+    if (cancelBtn) {
+      cancelBtn.addEventListener("click", () => {
+        state.counselingDraft = emptyCounselingDraft();
+        render();
+      });
+    }
+
+    document.querySelectorAll(".counseling-edit").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-id");
+        const rec = state.counselingRecords.find((r) => r.id === id);
+        if (!rec) return;
+        state.counselingDraft = counselingRecordToDraft(rec);
+        render();
+        document.getElementById("cf-record-name")?.focus();
+      });
+    });
+
+    document.querySelectorAll(".counseling-delete").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-id");
+        const rec = state.counselingRecords.find((r) => r.id === id);
+        const name = rec ? rec.recordName || getStudentNameById(rec.studentId) : "";
+        openConfirm({
+          title: "상담 기록을 삭제할까요?",
+          message: name
+            ? `${name} 님의 이 상담 기록을 삭제합니다.`
+            : "이 상담 기록을 삭제합니다.",
+          onConfirm: async () => {
+            try {
+              await deleteCounselingRecord(id);
+              if (state.counselingDraft.id === id) {
+                state.counselingDraft = emptyCounselingDraft();
+              }
+              showToast("상담 기록이 삭제되었습니다.");
+              render();
+            } catch (err) {
+              console.error("[deleteCounselingRecord]", err);
+              showToast("삭제에 실패했습니다. Firestore 규칙과 네트워크를 확인해 주세요.");
+            }
+          },
+        });
+      });
+    });
+
+    const form = document.getElementById("counseling-form");
+    if (form) {
+      form.addEventListener("submit", handleCounselingFormSubmit);
+    }
+  }
+
+  function collectCounselingFieldsFromForm(form) {
+    const val = (name) => String(form.elements[name]?.value ?? "").trim();
+    const chk = (name) => !!form.elements[name]?.checked;
+    const rf = form.elements.classFormat;
+    let classFormat = "";
+    if (rf) {
+      if (typeof rf.length === "number" && rf.length > 0) {
+        for (let i = 0; i < rf.length; i++) {
+          if (rf[i].checked) {
+            classFormat = rf[i].value;
+            break;
+          }
+        }
+      } else if (rf.checked) {
+        classFormat = rf.value;
+      }
+    }
+    return {
+      assignedInstructor: val("assignedInstructor"),
+      recordName: val("recordName"),
+      recordContact: val("recordContact"),
+      recordRegion: val("recordRegion"),
+      classFormat,
+      chBanner: chk("chBanner"),
+      chInternet: chk("chInternet"),
+      chReferral: chk("chReferral"),
+      chReferralName: val("chReferralName"),
+      chOther: chk("chOther"),
+      chOtherDetail: val("chOtherDetail"),
+      learningExperience: val("learningExperience"),
+      enrollmentPurpose: val("enrollmentPurpose"),
+      intConversation: chk("intConversation"),
+      intCertification: chk("intCertification"),
+      intEmployment: chk("intEmployment"),
+      intTravel: chk("intTravel"),
+      intRemind: chk("intRemind"),
+      intMaintain: chk("intMaintain"),
+      intOther: chk("intOther"),
+      intOtherDetail: val("intOtherDetail"),
+      goalWithPeriod: val("goalWithPeriod"),
+      availableTimes: val("availableTimes"),
+      specialNotes: val("specialNotes"),
+    };
+  }
+
+  async function handleCounselingFormSubmit(e) {
+    e.preventDefault();
+    if (!isDBReady()) {
+      showToast("Firebase 연결을 확인해 주세요.");
+      return;
+    }
+
+    const form = e.currentTarget;
+    const studentId = String(form.elements.studentId?.value || "").trim();
+    const counselingDate = String(form.elements.counselingDate?.value || "").trim();
+
+    if (!studentId) {
+      showToast("관리 목록에서 학생을 선택해 주세요.");
+      form.elements.studentId?.focus();
+      return;
+    }
+    if (!counselingDate) {
+      showToast("상담 날짜를 선택해 주세요.");
+      form.elements.counselingDate?.focus();
+      return;
+    }
+
+    if (counselingFormSubmitting) {
+      showToast("저장 처리 중입니다. 잠시만 기다려 주세요.");
+      return;
+    }
+    counselingFormSubmitting = true;
+    const submitBtn = document.getElementById("counseling-submit");
+    if (submitBtn) submitBtn.disabled = true;
+
+    const editingId = state.counselingDraft.id;
+    const fields = collectCounselingFieldsFromForm(form);
+    const payload = Object.assign({ studentId, counselingDate }, fields);
+
+    try {
+      if (editingId) {
+        await updateCounselingRecord(editingId, payload);
+        showToast("상담 기록이 수정되었습니다.");
+      } else {
+        await createCounselingRecord(payload);
+        showToast("상담 기록이 추가되었습니다.");
+      }
+      state.counselingDraft = emptyCounselingDraft();
+      render();
+    } catch (err) {
+      console.error("[handleCounselingFormSubmit]", err);
+      showToast("저장에 실패했습니다. Firestore 규칙과 네트워크를 확인해 주세요.");
+    } finally {
+      counselingFormSubmitting = false;
+      if (submitBtn) submitBtn.disabled = false;
     }
   }
 
@@ -610,14 +1286,14 @@
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-100 bg-white">
-          ${students.map((s) => renderStudentRow(s)).join("")}
+          ${students.map((s, idx) => renderStudentRow(s, idx)).join("")}
         </tbody>
       </table>
     `;
   }
 
-  function renderStudentRow(s) {
-    const initials = (s.name || "?").trim().slice(0, 1);
+  function renderStudentRow(s, rowIndex) {
+    const num = Number(rowIndex) + 1;
     const isExpanded = state.expandedRowIds.has(s.id);
     const statusBadge = s.isActive
       ? '<span class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 md:px-2.5 md:text-xs"><i class="fa-solid fa-circle text-[6px]"></i>수강 중</span>'
@@ -627,9 +1303,7 @@
       <tr class="student-row" data-id="${escapeHtml(s.id)}">
         <td class="whitespace-nowrap px-4 py-3.5 md:px-6">
           <div class="flex items-center gap-3">
-            <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-100 text-sm font-semibold text-brand-700">
-              ${escapeHtml(initials)}
-            </span>
+            <span class="w-7 shrink-0 text-center text-xs font-semibold tabular-nums text-slate-400 md:w-8 md:text-sm" aria-hidden="true">${formatNumber(num)}</span>
             <div class="min-w-0 leading-tight">
               <div class="flex items-center gap-1.5">
                 <p class="truncate font-medium text-slate-900">${escapeHtml(s.name)}</p>
@@ -689,7 +1363,7 @@
         label: "수업 요일",
         value:
           Array.isArray(s.scheduleDays) && s.scheduleDays.length > 0
-            ? s.scheduleDays.join(" · ")
+            ? formatScheduleDaysWithTimes(s.scheduleDays, s.scheduleDayTimes)
             : "-",
       },
       { label: "진도", value: s.progress },
@@ -1278,6 +1952,7 @@
     form.elements.lastClassDate.value = todayISO();
     form.elements.isActive.checked = true;
     setScheduleDaysOnForm(form, []);
+    refreshScheduleDayTimeRows(form, {});
     cleanInstructorLegacyOption(form);
     cleanCurriculumLegacyOption(form);
     // form.reset() 후에는 disabled placeholder 가 다시 selected 가 되어 value 가 "" 으로 돌아갑니다.
@@ -1307,6 +1982,7 @@
     form.elements.leaveReason.value = s.leaveReason || "";
     form.elements.notes.value = s.notes || "";
     setScheduleDaysOnForm(form, Array.isArray(s.scheduleDays) ? s.scheduleDays : []);
+    refreshScheduleDayTimeRows(form, normalizeScheduleDayTimesMap(s.scheduleDayTimes));
   }
 
   /** 학생 폼의 필수(*) 항목: 이름, 담당 강사, 연락처 */
@@ -1359,7 +2035,92 @@
       progress: String(fd.get("progress") || "").trim(),
       homework: String(fd.get("homework") || "").trim(),
       scheduleDays: orderedDays,
+      scheduleDayTimes: (() => {
+        const map = {};
+        if (orderedDays.length === 1 && orderedDays[0] === SCHEDULE_FLEXIBLE_DAY) {
+          return {};
+        }
+        form.querySelectorAll(".schedule-day-time-input").forEach((inp) => {
+          const day = inp.dataset.day;
+          const v = String(inp.value || "").trim();
+          if (day && v) map[day] = v;
+        });
+        return normalizeScheduleDayTimesMap(map);
+      })(),
     };
+  }
+
+  function getCheckedScheduleDayValuesFromForm(form) {
+    return Array.from(form.querySelectorAll('input[name="scheduleDays"]:checked')).map((cb) => String(cb.value));
+  }
+
+  function readScheduleDayTimesFromRows(form) {
+    const preserve = {};
+    form.querySelectorAll("#f-schedule-day-times-rows .schedule-day-time-input").forEach((inp) => {
+      const d = inp.dataset.day;
+      if (d) preserve[d] = inp.value == null ? "" : String(inp.value);
+    });
+    return preserve;
+  }
+
+  /**
+   * 선택된 요일에 맞춰 시간 입력 행을 갱신합니다.
+   * @param {HTMLFormElement} form
+   * @param {Record<string,string>|undefined} seedTimes  학생 데이터로 채울 때 전달. 체크박스 변경 시에는 생략(undefined).
+   */
+  function refreshScheduleDayTimeRows(form, seedTimes) {
+    const wrap = document.getElementById("f-schedule-day-times-wrap");
+    const rowsContainer = document.getElementById("f-schedule-day-times-rows");
+    if (!form || !wrap || !rowsContainer) return;
+
+    const preserve = seedTimes === undefined ? readScheduleDayTimesFromRows(form) : {};
+    const checked = getCheckedScheduleDayValuesFromForm(form);
+    const flexOnly =
+      checked.length === 1 && String(checked[0]).trim() === SCHEDULE_FLEXIBLE_DAY;
+
+    if (flexOnly || checked.length === 0) {
+      wrap.classList.add("hidden");
+      rowsContainer.innerHTML = "";
+      return;
+    }
+
+    const weekdaysSelected = SCHEDULE_DAY_DISPLAY_ORDER.filter((d) => checked.includes(d));
+    if (weekdaysSelected.length === 0) {
+      wrap.classList.add("hidden");
+      rowsContainer.innerHTML = "";
+      return;
+    }
+
+    wrap.classList.remove("hidden");
+    const useSeed = seedTimes !== undefined;
+    const merged = {};
+    weekdaysSelected.forEach((d) => {
+      if (Object.prototype.hasOwnProperty.call(preserve, d)) {
+        merged[d] = preserve[d];
+      } else {
+        merged[d] = useSeed ? String((seedTimes && seedTimes[d]) || "") : "";
+      }
+    });
+
+    rowsContainer.innerHTML = weekdaysSelected
+      .map((d) => {
+        const val = merged[d] != null ? escapeHtml(String(merged[d])) : "";
+        return `
+          <div class="schedule-time-row" role="group" aria-label="${escapeHtml(d)}요일 수업 시간">
+            <span class="schedule-time-day-pill">${escapeHtml(d)}</span>
+            <div class="schedule-time-input-wrap">
+              <i class="fa-solid fa-clock schedule-time-input-icon" aria-hidden="true"></i>
+              <input
+                type="time"
+                step="300"
+                class="schedule-time-input schedule-day-time-input"
+                data-day="${escapeHtml(d)}"
+                value="${val}"
+              />
+            </div>
+          </div>`;
+      })
+      .join("");
   }
 
   // 요일·유동 칩을 학생 모달 폼 안에 초기화합니다 (한 번만).
@@ -1379,6 +2140,8 @@
         const flex = checkboxes.find((cb) => cb.value === SCHEDULE_FLEXIBLE_DAY);
         if (flex) flex.checked = false;
       }
+      const form = container.closest("form");
+      if (form) refreshScheduleDayTimeRows(form);
     });
   }
 
@@ -1761,6 +2524,8 @@
     state.filter = "all";
     state.keyword = "";
     state.salesFilter = "all";
+    state.counselingListFilterStudentId = "";
+    state.counselingDraft = emptyCounselingDraft();
 
     closeMobileMenu();
     showLogin();
@@ -1974,6 +2739,7 @@
     if (!isDBReady()) {
       // 설정값이 아직 비어 있는 등 Firestore 를 사용할 수 없는 상태
       state.isStudentsLoading = false;
+      state.isCounselingLoading = false;
       render();
       showFirebaseConfigBanner();
       return;
@@ -1982,6 +2748,7 @@
     // onSnapshot 을 먼저 걸어 첫 스냅샷으로 UI를 바로 풀고, 시드는 병렬로 진행합니다.
     hideFirebaseConfigBanner();
     subscribeToStudents();
+    subscribeToCounselingRecords();
     seedFirestoreOnce().catch((err) => {
       console.error("[seedFirestoreOnce]", err);
     });

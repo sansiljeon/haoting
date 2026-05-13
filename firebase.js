@@ -1,7 +1,7 @@
 /* ============================================================
  * Firebase 데이터 레이어
  * ------------------------------------------------------------
- * - Firestore 의 "students" 컬렉션을 단일 진실 공급원으로 사용합니다.
+ * - Firestore 의 "students" 및 "counselingRecords" 컬렉션을 사용합니다.
  * - Authentication: 이메일·비밀번호 로그인 (getAuth, signInWithEmailAndPassword 등).
  * - 외부에는 window.HaotingDB 를 통해 Firestore CRUD 및 Auth API 를 노출합니다.
  *   (app.js 는 Firebase SDK 를 직접 import 하지 않고 이 객체만 사용)
@@ -30,6 +30,8 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 
 const COLLECTION = "students";
+/** 학생별 상담 기록 (studentId 로 학생 문서와 연결) */
+const COLLECTION_COUNSELING = "counselingRecords";
 
 function isPlaceholder(value) {
   if (!value || typeof value !== "string") return true;
@@ -170,6 +172,54 @@ window.HaotingDB = {
   async deleteStudent(id) {
     if (!db) throw new Error("Firestore is not initialized");
     await deleteDoc(doc(db, COLLECTION, id));
+  },
+
+  /**
+   * 상담 기록 전체를 실시간 구독합니다 (상담일 내림차순).
+   * 콜백: (records, error) => void
+   */
+  subscribeCounselingRecords(callback) {
+    if (!db) return () => {};
+    const q = query(
+      collection(db, COLLECTION_COUNSELING),
+      orderBy("counselingDate", "desc")
+    );
+    return onSnapshot(
+      q,
+      (snap) => {
+        const items = snap.docs.map((d) =>
+          Object.assign({}, d.data() || {}, { id: d.id })
+        );
+        callback(items, null);
+      },
+      (err) => {
+        console.error("[subscribeCounselingRecords]", err);
+        callback([], err);
+      }
+    );
+  },
+
+  async createCounselingRecord(draft) {
+    if (!db) throw new Error("Firestore is not initialized");
+    const ref = await addDoc(collection(db, COLLECTION_COUNSELING), {
+      ...stripId(draft),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return ref.id;
+  },
+
+  async updateCounselingRecord(id, draft) {
+    if (!db) throw new Error("Firestore is not initialized");
+    await updateDoc(doc(db, COLLECTION_COUNSELING, id), {
+      ...stripId(draft),
+      updatedAt: serverTimestamp(),
+    });
+  },
+
+  async deleteCounselingRecord(id) {
+    if (!db) throw new Error("Firestore is not initialized");
+    await deleteDoc(doc(db, COLLECTION_COUNSELING, id));
   },
 
   /**
