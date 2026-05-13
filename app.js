@@ -1238,7 +1238,7 @@
               type="search"
               value="${escapeHtml(state.keyword)}"
               placeholder="이름·강사·연락처·커리큘럼 검색"
-              class="form-input pl-9"
+              class="form-input w-full"
             />
           </div>
         </div>

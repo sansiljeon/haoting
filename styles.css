@@ -79,6 +79,11 @@ textarea.form-input {
   padding-right: 3rem !important; /* 오른쪽 눈 아이콘 버튼 여백 */
 }
 
+/* 학생 관리 검색: 돋보기 아이콘(absolute left-3)과 플레이스홀더·입력 겹침 방지 */
+#search-input {
+  padding-left: 2.75rem !important;
+}
+
 /* ---- 사이드바 활성 메뉴 ---- */
 .nav-item.active {
   background-color: var(--brand-50);
