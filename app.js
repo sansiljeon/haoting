@@ -128,6 +128,7 @@
     currentUser: null, // 로그인 한 선생님 정보 (없으면 비로그인)
     expandedRowIds: new Set(), // 회차 관리가 펼쳐진 학생 행 id 들
     expandedSessionPanelByStudent: {}, // 학생별 현재 펼쳐진 회차 번호
+    editingRenewalEntryByStudent: {}, // 학생별 현재 수정 중인 재등록 기록 id
     detailStudentId: null, // 읽기 전용 상세 모달에 표시 중인 학생 id
     detailCounselingId: null, // 읽기 전용 상담 상세 모달에 표시 중인 상담 기록 id
     pendingCounselingLinkId: null, // 상담 상세에서 학생 등록으로 넘어온 경우 연결할 상담 기록 id
@@ -516,6 +517,104 @@
     } catch (err) {
       console.error("[addStudentRenewalHistory]", err);
       showToast("재등록 기록 저장에 실패했습니다. 잠시 후 다시 시도해 주세요.");
+      render();
+    }
+  }
+
+  function getEditingRenewalEntry(studentId, entries) {
+    const editingId = state.editingRenewalEntryByStudent[studentId];
+    if (!editingId) return null;
+    return normalizeRenewalHistory(entries).find((item) => item.id === editingId) || null;
+  }
+
+  async function updateStudentRenewalHistory(studentId, entryId, patch) {
+    const student = state.students.find((item) => item.id === studentId);
+    if (!student) {
+      showToast("학생 정보를 찾을 수 없습니다.");
+      return;
+    }
+
+    const history = normalizeRenewalHistory(student.renewalHistory);
+    const target = history.find((item) => item.id === entryId);
+    if (!target) {
+      showToast("수정할 재등록 기록을 찾을 수 없습니다.");
+      return;
+    }
+
+    const addedSessions = Math.max(0, Math.round(Number(patch && patch.addedSessions) || 0));
+    if (addedSessions <= 0) {
+      showToast("추가할 회차를 1회 이상 입력해 주세요.");
+      return;
+    }
+
+    const nextEntry = {
+      id: target.id,
+      renewalDate: String((patch && patch.renewalDate) || "").trim() || todayISO(),
+      addedSessions,
+      note: String((patch && patch.note) || "").trim(),
+    };
+    const nextHistory = normalizeRenewalHistory(
+      history.map((item) => (item.id === entryId ? nextEntry : item))
+    );
+    const nextRegisteredSessions = Math.max(
+      0,
+      (Number(student.registeredSessions) || 0) - Number(target.addedSessions || 0) + addedSessions
+    );
+
+    student.renewalHistory = nextHistory;
+    student.registeredSessions = nextRegisteredSessions;
+    delete state.editingRenewalEntryByStudent[studentId];
+    render();
+
+    try {
+      await updateStudent(studentId, {
+        renewalHistory: nextHistory,
+        registeredSessions: nextRegisteredSessions,
+      });
+      showToast("재등록 기록이 수정되었습니다.");
+    } catch (err) {
+      console.error("[updateStudentRenewalHistory]", err);
+      showToast("재등록 기록 수정에 실패했습니다. 잠시 후 다시 시도해 주세요.");
+      render();
+    }
+  }
+
+  async function deleteStudentRenewalHistory(studentId, entryId) {
+    const student = state.students.find((item) => item.id === studentId);
+    if (!student) {
+      showToast("학생 정보를 찾을 수 없습니다.");
+      return;
+    }
+
+    const history = normalizeRenewalHistory(student.renewalHistory);
+    const target = history.find((item) => item.id === entryId);
+    if (!target) {
+      showToast("삭제할 재등록 기록을 찾을 수 없습니다.");
+      return;
+    }
+
+    const nextHistory = normalizeRenewalHistory(history.filter((item) => item.id !== entryId));
+    const nextRegisteredSessions = Math.max(
+      0,
+      (Number(student.registeredSessions) || 0) - Number(target.addedSessions || 0)
+    );
+
+    student.renewalHistory = nextHistory;
+    student.registeredSessions = nextRegisteredSessions;
+    if (state.editingRenewalEntryByStudent[studentId] === entryId) {
+      delete state.editingRenewalEntryByStudent[studentId];
+    }
+    render();
+
+    try {
+      await updateStudent(studentId, {
+        renewalHistory: nextHistory,
+        registeredSessions: nextRegisteredSessions,
+      });
+      showToast("재등록 기록이 삭제되었습니다.");
+    } catch (err) {
+      console.error("[deleteStudentRenewalHistory]", err);
+      showToast("재등록 기록 삭제에 실패했습니다. 잠시 후 다시 시도해 주세요.");
       render();
     }
   }
@@ -2167,6 +2266,7 @@
     const remainingCount = Math.max(sessionSlots.length - completedCount, 0);
     const renewalHistory = normalizeRenewalHistory(s.renewalHistory);
     const renewalCount = renewalHistory.length;
+    const editingRenewal = getEditingRenewalEntry(s.id, renewalHistory);
     const activeSessionNumber = state.expandedSessionPanelByStudent[s.id] || null;
     const activeSlot =
       sessionSlots.find((item) => item.sessionNumber === activeSessionNumber) || null;
@@ -2244,13 +2344,48 @@
                   <form class="renewal-form grid gap-2 sm:grid-cols-[120px_120px_minmax(0,1fr)_auto]" data-student-id="${escapeHtml(
                     s.id
                   )}">
-                    <input type="date" name="renewalDate" class="form-input text-sm" value="${escapeHtml(todayISO())}" />
-                    <input type="number" name="addedSessions" min="1" class="form-input text-sm" placeholder="추가 회차" />
-                    <input type="text" name="note" class="form-input text-sm" placeholder="메모 (선택)" />
-                    <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-lg bg-brand-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-brand-700">
-                      <i class="fa-solid fa-plus"></i>
-                      추가
-                    </button>
+                    <input type="hidden" name="renewalEntryId" value="${escapeHtml(
+                      editingRenewal ? editingRenewal.id : ""
+                    )}" />
+                    <input
+                      type="date"
+                      name="renewalDate"
+                      class="form-input text-sm"
+                      value="${escapeHtml(editingRenewal ? editingRenewal.renewalDate : todayISO())}"
+                    />
+                    <input
+                      type="number"
+                      name="addedSessions"
+                      min="1"
+                      class="form-input text-sm"
+                      placeholder="추가 회차"
+                      value="${escapeHtml(editingRenewal ? String(editingRenewal.addedSessions || "") : "")}"
+                    />
+                    <input
+                      type="text"
+                      name="note"
+                      class="form-input text-sm"
+                      placeholder="메모 (선택)"
+                      value="${escapeHtml(editingRenewal ? editingRenewal.note : "")}"
+                    />
+                    <div class="flex items-center gap-2">
+                      <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-lg bg-brand-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-brand-700">
+                        <i class="fa-solid ${editingRenewal ? "fa-check" : "fa-plus"}"></i>
+                        ${editingRenewal ? "수정 저장" : "추가"}
+                      </button>
+                      ${
+                        editingRenewal
+                          ? `<button
+                              type="button"
+                              class="renewal-cancel inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50"
+                              data-student-id="${escapeHtml(s.id)}"
+                            >
+                              <i class="fa-solid fa-xmark"></i>
+                              취소
+                            </button>`
+                          : ""
+                      }
+                    </div>
                   </form>
                 </div>
                 <div class="mt-3 space-y-2">
@@ -2273,9 +2408,31 @@
                                 : ""
                             }
                           </div>
-                          <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600">
-                            누적 ${escapeHtml(formatCountWithUnit(s.registeredSessions, "회"))}
-                          </span>
+                          <div class="flex flex-wrap items-center gap-2">
+                            ${
+                              editingRenewal && editingRenewal.id === entry.id
+                                ? `<span class="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700">
+                                    편집 중
+                                  </span>`
+                                : ""
+                            }
+                            <button
+                              type="button"
+                              class="renewal-edit inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700"
+                              data-student-id="${escapeHtml(s.id)}"
+                              data-entry-id="${escapeHtml(entry.id)}"
+                            >
+                              수정
+                            </button>
+                            <button
+                              type="button"
+                              class="renewal-delete inline-flex items-center rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-600 transition hover:bg-red-50"
+                              data-student-id="${escapeHtml(s.id)}"
+                              data-entry-id="${escapeHtml(entry.id)}"
+                            >
+                              삭제
+                            </button>
+                          </div>
                         </div>`
                           )
                           .join("")
@@ -2924,7 +3081,63 @@
         const addedSessions = Number(formEl.elements.addedSessions?.value || 0);
         const renewalDate = String(formEl.elements.renewalDate?.value || "").trim() || todayISO();
         const note = String(formEl.elements.note?.value || "").trim();
+        const renewalEntryId = String(formEl.elements.renewalEntryId?.value || "").trim();
+        if (renewalEntryId) {
+          await updateStudentRenewalHistory(studentId, renewalEntryId, {
+            renewalDate,
+            addedSessions,
+            note,
+          });
+          return;
+        }
         await addStudentRenewalHistory(studentId, { renewalDate, addedSessions, note });
+      });
+    });
+
+    document.querySelectorAll(".renewal-edit").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const studentId = btn.dataset.studentId;
+        const entryId = btn.dataset.entryId;
+        if (!studentId || !entryId) return;
+        state.editingRenewalEntryByStudent[studentId] = entryId;
+        render();
+      });
+    });
+
+    document.querySelectorAll(".renewal-cancel").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const studentId = btn.dataset.studentId;
+        if (!studentId) return;
+        delete state.editingRenewalEntryByStudent[studentId];
+        render();
+      });
+    });
+
+    document.querySelectorAll(".renewal-delete").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const studentId = btn.dataset.studentId;
+        const entryId = btn.dataset.entryId;
+        const student = state.students.find((item) => item.id === studentId);
+        const target = normalizeRenewalHistory(student && student.renewalHistory).find(
+          (item) => item.id === entryId
+        );
+        if (!studentId || !entryId || !target) {
+          showToast("삭제할 재등록 기록을 찾을 수 없습니다.");
+          return;
+        }
+        openConfirm({
+          title: "재등록 기록을 삭제하시겠습니까?",
+          message: `${student ? student.name : "학생"} 학생의 ${formatDate(target.renewalDate)} 재등록 기록이 삭제됩니다.`,
+          onConfirm: async () => {
+            await deleteStudentRenewalHistory(studentId, entryId);
+          },
+        });
       });
     });
 
@@ -3010,6 +3223,7 @@
     if (state.expandedRowIds.has(id)) {
       state.expandedRowIds.delete(id);
       delete state.expandedSessionPanelByStudent[id];
+      delete state.editingRenewalEntryByStudent[id];
     } else {
       state.expandedRowIds.add(id);
     }
