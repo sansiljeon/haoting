@@ -135,6 +135,27 @@ textarea.form-input {
   display: flex !important;
 }
 
+.app-modal-shell {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.app-modal-shell.modal-open {
+  align-items: flex-start !important;
+}
+
+.app-modal-shell > .app-modal-panel {
+  margin: 0 auto;
+  max-height: calc(100dvh - 2rem);
+}
+
+@media (min-height: 860px) {
+  .app-modal-shell > .app-modal-panel {
+    margin: 1rem auto;
+    max-height: calc(100dvh - 4rem);
+  }
+}
+
 /* ---- 학생 상세 모달 ---- */
 .student-detail-summary {
   display: flex;
@@ -523,6 +544,333 @@ textarea.form-input {
 
   .session-tabs-wrap {
     padding: 0.8rem;
+  }
+}
+
+.student-management-tab-wrap {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid #e2e8f0;
+  border-radius: 9999px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.student-management-tab-wrap.is-active {
+  border-color: #16a34a;
+  box-shadow: 0 10px 18px -16px rgba(22, 163, 74, 0.8);
+}
+
+.student-management-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.9rem;
+  border: none;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #334155;
+  background: transparent;
+}
+
+.student-management-tab-wrap.is-active .student-management-tab {
+  color: #166534;
+  background: #f0fdf4;
+}
+
+.student-management-tab-count {
+  display: inline-flex;
+  min-width: 1.5rem;
+  height: 1.5rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: rgba(148, 163, 184, 0.14);
+  font-size: 0.75rem;
+  color: #475569;
+}
+
+.student-management-tab-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  border: none;
+  color: #94a3b8;
+  border-left: 1px solid #e2e8f0;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.student-management-tab-delete:hover {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.student-form-tab-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.student-form-tab-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.85rem;
+  background: #ffffff;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #334155;
+}
+
+.payment-group-wrap {
+  padding: 1rem 1rem 1.05rem !important;
+  border-color: #d7e4ef !important;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.98)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+.payment-group-header {
+  align-items: flex-start !important;
+  gap: 0.9rem !important;
+}
+
+.payment-group-copy {
+  min-width: 0;
+  padding-top: 0.1rem;
+}
+
+.payment-group-title {
+  display: inline-block;
+  margin: 0;
+  color: #64748b !important;
+}
+
+.payment-group-desc {
+  margin-top: 0.35rem !important;
+  line-height: 1.6;
+}
+
+.payment-group-summary {
+  padding-top: 0.15rem;
+  line-height: 1.55;
+}
+
+.payment-group-wrap .payment-group-button {
+  min-width: 2.8rem;
+  min-height: 2.8rem;
+  box-shadow: 0 4px 12px -10px rgba(15, 23, 42, 0.45);
+}
+
+@media (max-width: 639px) {
+  .payment-group-wrap {
+    padding: 0.95rem !important;
+  }
+
+  .payment-group-summary {
+    width: 100%;
+    text-align: left;
+  }
+}
+
+.refund-sheet-preview-wrap {
+  min-height: 0;
+  overflow-x: auto;
+  padding-left: 1rem !important;
+  padding-right: 1rem !important;
+  background:
+    radial-gradient(circle at top right, rgba(14, 165, 233, 0.08), transparent 20%),
+    linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
+}
+
+.refund-sheet-modal-body {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 0.92fr) minmax(0, 1.08fr);
+}
+
+.refund-sheet-form-pane {
+  min-height: 0;
+}
+
+#refund-sheet-preview {
+  width: 100%;
+}
+
+@media (min-width: 1440px) {
+  .refund-sheet-modal-body {
+    grid-template-columns: 320px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+}
+
+.refund-sheet-paper {
+  box-sizing: border-box;
+  width: min(100%, 600px);
+  margin: 0 auto;
+  background: #ffffff;
+  border: 1px solid #dbe4ee;
+  border-radius: 0.75rem;
+  box-shadow: 0 20px 40px -28px rgba(15, 23, 42, 0.45);
+  padding: 0.95rem 0.95rem 1.05rem;
+}
+
+.refund-sheet-accent {
+  height: 0.4rem;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, #2c92b5 0%, #4ca8c7 100%);
+}
+
+.refund-sheet-accent.top {
+  margin-bottom: 1.15rem;
+}
+
+.refund-sheet-accent.bottom {
+  margin-top: 1.2rem;
+}
+
+.refund-sheet-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.refund-sheet-title {
+  margin: 0;
+  font-size: clamp(1.18rem, 2vw, 1.55rem);
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.04em;
+  color: #155e75;
+}
+
+.refund-sheet-subtitle {
+  margin: 0.35rem 0 0;
+  font-size: 0.74rem;
+  letter-spacing: 0.24em;
+  color: #94a3b8;
+}
+
+.refund-sheet-block + .refund-sheet-block {
+  margin-top: 1.5rem;
+}
+
+.refund-sheet-section-title {
+  margin: 0 0 0.55rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 2px solid #4ca8c7;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.refund-sheet-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.refund-sheet-table th,
+.refund-sheet-table td {
+  border: 1px solid #cbd5e1;
+  padding: 0.52rem 0.44rem;
+  text-align: center;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: #0f172a;
+}
+
+.refund-sheet-table th {
+  background: #f8fafc;
+  font-weight: 700;
+  color: #334155;
+}
+
+.refund-sheet-table.is-account th {
+  width: 22%;
+}
+
+.refund-sheet-note {
+  margin-top: 0.95rem;
+  text-align: center;
+  font-size: 0.74rem;
+  line-height: 1.65;
+  font-weight: 600;
+  color: #334155;
+}
+
+.refund-sheet-footer {
+  display: flex;
+  justify-content: center;
+  gap: 2rem;
+  margin-top: 2.25rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+@media (max-width: 1023px) {
+  .refund-sheet-paper {
+    width: min(100%, 540px);
+    padding: 0.9rem;
+  }
+
+  .refund-sheet-table th,
+  .refund-sheet-table td {
+    font-size: 0.76rem;
+    padding: 0.48rem 0.4rem;
+  }
+
+  .refund-sheet-footer {
+    flex-direction: column;
+    gap: 0.75rem;
+    align-items: center;
+  }
+}
+
+@media print {
+  body.printing-refund-sheet > *:not(#refund-sheet-modal) {
+    display: none !important;
+  }
+
+  body.printing-refund-sheet #refund-sheet-modal {
+    position: static !important;
+    display: block !important;
+    background: #ffffff !important;
+    padding: 0 !important;
+  }
+
+  body.printing-refund-sheet #refund-sheet-modal > div {
+    max-height: none !important;
+    max-width: none !important;
+    width: 100% !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+  }
+
+  body.printing-refund-sheet #refund-sheet-modal > div > :not(.refund-sheet-preview-wrap) {
+    display: none !important;
+  }
+
+  body.printing-refund-sheet .refund-sheet-preview-wrap {
+    overflow: visible !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+  }
+
+  body.printing-refund-sheet .refund-sheet-paper {
+    width: 100% !important;
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    padding: 1.2cm 1cm 1cm !important;
   }
 }
 

@@ -23,6 +23,7 @@ import {
   onSnapshot,
   query,
   orderBy,
+  where,
   serverTimestamp,
   writeBatch,
   getDocs,
@@ -32,6 +33,8 @@ import {
 const COLLECTION = "students";
 /** 학생별 상담 기록 (studentId 로 학생 문서와 연결) */
 const COLLECTION_COUNSELING = "counselingRecords";
+/** 학생 관리 화면의 사용자 정의 탭 */
+const COLLECTION_STUDENT_TABS = "studentTabs";
 
 function isPlaceholder(value) {
   if (!value || typeof value !== "string") return true;
@@ -172,6 +175,79 @@ window.HaotingDB = {
   async deleteStudent(id) {
     if (!db) throw new Error("Firestore is not initialized");
     await deleteDoc(doc(db, COLLECTION, id));
+  },
+
+  /**
+   * 학생 탭 컬렉션을 실시간 구독합니다 (sortOrder 오름차순).
+   * 콜백: (tabs, error) => void
+   */
+  subscribeStudentTabs(callback) {
+    if (!db) return () => {};
+    const q = query(
+      collection(db, COLLECTION_STUDENT_TABS),
+      orderBy("sortOrder", "asc")
+    );
+    return onSnapshot(
+      q,
+      (snap) => {
+        const items = snap.docs.map((d) =>
+          Object.assign({}, d.data() || {}, { id: d.id })
+        );
+        callback(items, null);
+      },
+      (err) => {
+        console.error("[subscribeStudentTabs]", err);
+        callback([], err);
+      }
+    );
+  },
+
+  async createStudentTab(draft) {
+    if (!db) throw new Error("Firestore is not initialized");
+    const payload = stripId(draft);
+    const sortOrder =
+      Number(payload.sortOrder) || Date.now();
+    const ref = await addDoc(collection(db, COLLECTION_STUDENT_TABS), {
+      ...payload,
+      sortOrder,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return ref.id;
+  },
+
+  async updateStudentTab(id, draft) {
+    if (!db) throw new Error("Firestore is not initialized");
+    await updateDoc(doc(db, COLLECTION_STUDENT_TABS, id), {
+      ...stripId(draft),
+      updatedAt: serverTimestamp(),
+    });
+  },
+
+  /**
+   * 탭 메타데이터를 삭제하고, 해당 탭을 참조하는 학생 문서에서도 id 를 제거합니다.
+   */
+  async deleteStudentTab(id) {
+    if (!db) throw new Error("Firestore is not initialized");
+    const batch = writeBatch(db);
+    const studentSnap = await getDocs(
+      query(
+        collection(db, COLLECTION),
+        where("studentTabIds", "array-contains", id)
+      )
+    );
+    studentSnap.docs.forEach((studentDoc) => {
+      const data = studentDoc.data() || {};
+      const nextIds = Array.isArray(data.studentTabIds)
+        ? data.studentTabIds.filter((item) => String(item) !== String(id))
+        : [];
+      batch.update(studentDoc.ref, {
+        studentTabIds: nextIds,
+        updatedAt: serverTimestamp(),
+      });
+    });
+    batch.delete(doc(db, COLLECTION_STUDENT_TABS, id));
+    await batch.commit();
   },
 
   /**

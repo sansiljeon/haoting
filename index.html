@@ -288,13 +288,13 @@
     <!-- ============== 학생 추가/수정 모달 ============== -->
     <div
       id="student-modal"
-      class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+      class="app-modal-shell fixed inset-0 z-50 hidden items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-labelledby="student-modal-title"
     >
       <div
-        class="flex max-h-[90vh] min-h-0 w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+        class="app-modal-panel flex max-h-[90vh] min-h-0 w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
       >
         <div class="flex items-start justify-between border-b border-slate-200 px-6 py-4">
           <div>
@@ -401,6 +401,11 @@
             </div>
 
             <div class="md:col-span-2">
+              <label class="form-label">학생 탭</label>
+              <div id="f-student-tabs-wrap"></div>
+            </div>
+
+            <div class="md:col-span-2">
               <p class="mb-2 mt-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
                 수업 정보
               </p>
@@ -461,6 +466,19 @@
                 step="1000"
                 class="form-input"
                 placeholder="예) 720000"
+              />
+            </div>
+
+            <div>
+              <label class="form-label" for="f-received-total">받은 금액 총액 (원)</label>
+              <input
+                id="f-received-total"
+                name="receivedAmountTotal"
+                type="number"
+                min="0"
+                step="1000"
+                class="form-input"
+                placeholder="예) 1080000"
               />
             </div>
 
@@ -585,13 +603,13 @@
     <!-- ============== 학생 상세 모달 ============== -->
     <div
       id="student-detail-modal"
-      class="fixed inset-0 z-[55] hidden items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+      class="app-modal-shell fixed inset-0 z-[55] hidden items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-labelledby="student-detail-modal-title"
     >
       <div
-        class="flex max-h-[90vh] min-h-0 w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+        class="app-modal-panel flex max-h-[90vh] min-h-0 w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
       >
         <div class="flex items-start justify-between border-b border-slate-200 px-6 py-4">
           <div>
@@ -616,7 +634,145 @@
         >
           <button
             type="button"
+            id="student-detail-refund-btn"
+            data-student-id=""
+            class="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700"
+          >
+            <i class="fa-solid fa-file-invoice"></i>
+            환불 내역서
+          </button>
+          <button
+            type="button"
             class="student-detail-close rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+          >
+            닫기
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============== 환불 내역서 모달 ============== -->
+    <div
+      id="refund-sheet-modal"
+      class="app-modal-shell fixed inset-0 z-[57] hidden items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="refund-sheet-student-name"
+    >
+      <div class="app-modal-panel flex max-h-[92vh] min-h-0 w-full max-w-7xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <div class="flex items-start justify-between border-b border-slate-200 px-6 py-4">
+          <div>
+            <h2 id="refund-sheet-student-name" class="text-lg font-semibold text-slate-900">
+              환불 내역서
+            </h2>
+            <p id="refund-sheet-student-meta" class="mt-0.5 text-sm text-slate-500">
+              학생 환불 내역서를 작성하고 인쇄합니다.
+            </p>
+          </div>
+          <button
+            type="button"
+            class="refund-sheet-close rounded-md p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+            aria-label="닫기"
+          >
+            <i class="fa-solid fa-xmark text-lg"></i>
+          </button>
+        </div>
+        <div class="refund-sheet-modal-body min-h-0 flex-1">
+          <form
+            id="refund-sheet-form"
+            class="refund-sheet-form-pane min-h-0 overflow-y-auto border-b border-slate-200 bg-slate-50 px-6 py-5 xl:border-b-0 xl:border-r"
+            novalidate
+          >
+            <div class="space-y-4">
+              <div>
+                <label class="form-label" for="refund-payment-group">결제 묶음</label>
+                <select id="refund-payment-group" name="paymentGroupId" class="form-input"></select>
+              </div>
+              <div>
+                <label class="form-label" for="refund-lesson-description">수업 내용 (회차)</label>
+                <input id="refund-lesson-description" name="lessonDescription" type="text" class="form-input" />
+              </div>
+              <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-1">
+                <div>
+                  <label class="form-label" for="refund-regular-price">정가</label>
+                  <input id="refund-regular-price" name="regularPrice" type="number" min="0" step="1000" class="form-input" />
+                </div>
+                <div>
+                  <label class="form-label" for="refund-event-price">이벤트가(결제액)</label>
+                  <input id="refund-event-price" name="eventPrice" type="number" min="0" step="1000" class="form-input" />
+                </div>
+                <div>
+                  <label class="form-label" for="refund-per-session-price">회당 가격</label>
+                  <input id="refund-per-session-price" name="perSessionPrice" type="number" min="0" step="1000" class="form-input" />
+                </div>
+                <div>
+                  <label class="form-label" for="refund-amount">환불액</label>
+                  <input id="refund-amount" name="refundAmount" type="number" min="0" step="1000" class="form-input" />
+                </div>
+              </div>
+              <div>
+                <p class="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  환불 받을 계좌
+                </p>
+              </div>
+              <div>
+                <label class="form-label" for="refund-bank-name">은행명</label>
+                <input id="refund-bank-name" name="bankName" type="text" class="form-input" />
+              </div>
+              <div>
+                <label class="form-label" for="refund-account-number">계좌번호</label>
+                <input id="refund-account-number" name="accountNumber" type="text" class="form-input" />
+              </div>
+              <div>
+                <label class="form-label" for="refund-account-holder">예금주</label>
+                <input id="refund-account-holder" name="accountHolder" type="text" class="form-input" />
+              </div>
+              <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-1">
+                <div>
+                  <label class="form-label" for="refund-issue-date">작성일</label>
+                  <input id="refund-issue-date" name="issueDate" type="date" class="form-input" />
+                </div>
+                <div>
+                  <label class="form-label" for="refund-signer-name">이름</label>
+                  <input id="refund-signer-name" name="signerName" type="text" class="form-input" />
+                </div>
+              </div>
+            </div>
+          </form>
+          <div class="refund-sheet-preview-wrap min-h-0 overflow-y-auto bg-slate-100 px-4 py-5 md:px-6">
+            <div id="refund-sheet-preview"></div>
+          </div>
+        </div>
+        <div
+          class="relative z-10 flex shrink-0 items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-6 py-4"
+        >
+          <button
+            type="button"
+            id="refund-sheet-download-btn"
+            class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+          >
+            <i class="fa-solid fa-file-arrow-down"></i>
+            PDF 다운로드
+          </button>
+          <button
+            type="button"
+            id="refund-sheet-print-btn"
+            class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+          >
+            <i class="fa-solid fa-print"></i>
+            인쇄
+          </button>
+          <button
+            type="button"
+            id="refund-sheet-save-btn"
+            class="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700"
+          >
+            <i class="fa-solid fa-floppy-disk"></i>
+            저장
+          </button>
+          <button
+            type="button"
+            class="refund-sheet-close rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
           >
             닫기
           </button>
@@ -627,13 +783,13 @@
     <!-- ============== 상담 기록 상세 모달 ============== -->
     <div
       id="counseling-detail-modal"
-      class="fixed inset-0 z-[56] hidden items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+      class="app-modal-shell fixed inset-0 z-[56] hidden items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-labelledby="counseling-detail-modal-title"
     >
       <div
-        class="flex max-h-[90vh] min-h-0 w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+        class="app-modal-panel flex max-h-[90vh] min-h-0 w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
       >
         <div class="flex items-start justify-between border-b border-slate-200 px-6 py-4">
           <div>

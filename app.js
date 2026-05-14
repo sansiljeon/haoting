@@ -36,6 +36,11 @@
     "HSK 5급",
     "HSK 6급",
   ];
+  const STUDENT_SORT_OPTIONS = [
+    { value: "default", label: "기본순" },
+    { value: "session-price-desc", label: "수업 1회당 비용 높은순" },
+    { value: "session-price-asc", label: "수업 1회당 비용 낮은순" },
+  ];
   const SCHEDULE_FLEXIBLE_DAY = "유동";
   const SESSION_NOTIFICATION_TEMPLATE = `[이름]님, 안녕하세요!
 예정된 수업 안내드립니다.
@@ -120,28 +125,38 @@
     counselingStatusFilter: "all", // "all" | "registered" | "unregistered"
     /** 상단 작성/수정 폼 (수강생 상담 기록지 필드) */
     counselingDraft: emptyCounselingDraft(),
+    studentTabs: [],
+    isStudentTabsLoading: true,
+    selectedStudentTabId: "all",
     filter: "all", // "all" | "active"
     keyword: "",
+    courseTrackFilter: "all", // "all" | "basic" | "conversation" | "certification"
+    studentSort: "default",
     editingId: null, // 모달이 수정 모드일 때의 학생 id
     pendingDeleteId: null, // 확인 모달에서 삭제 대상
     salesFilter: "all", // 매출 화면 필터: "all" | "active"
     currentUser: null, // 로그인 한 선생님 정보 (없으면 비로그인)
     expandedRowIds: new Set(), // 회차 관리가 펼쳐진 학생 행 id 들
+    selectedPaymentGroupByStudent: {}, // 학생별 현재 선택된 결제 묶음 id
     expandedSessionPanelByStudent: {}, // 학생별 현재 펼쳐진 회차 번호
     editingRenewalEntryByStudent: {}, // 학생별 현재 수정 중인 재등록 기록 id
     detailStudentId: null, // 읽기 전용 상세 모달에 표시 중인 학생 id
     detailCounselingId: null, // 읽기 전용 상담 상세 모달에 표시 중인 상담 기록 id
     pendingCounselingLinkId: null, // 상담 상세에서 학생 등록으로 넘어온 경우 연결할 상담 기록 id
+    refundStudentId: null, // 환불 내역서 모달에 표시 중인 학생 id
+    refundDraft: null, // 환불 내역서 작성 중인 임시 draft
   };
 
   // Firestore 구독 해제 함수. 여러 번 구독되지 않도록 한 곳에서 보관합니다.
   let unsubscribeStudents = null;
+  let unsubscribeStudentTabs = null;
   let unsubscribeCounselingRecords = null;
   let unsubscribeAuth = null;
   let authListenerWired = false;
   /** 학생 폼 저장 중 중복 제출 방지 */
   let studentFormSubmitting = false;
   let counselingFormSubmitting = false;
+  let refundPdfLibraryPromise = null;
 
   /* ==========================================================
    * 2. 더미 데이터
@@ -161,6 +176,7 @@
       location: "강남 본원 302호",
       durationMinutes: 60,
       tuitionFee: 720000,
+      receivedAmountTotal: 1100000,
       contact: "010-1234-5678",
       inflowChannel: "인스타그램 광고",
       region: "서울 강남구",
@@ -176,6 +192,7 @@
           id: "renewal-001",
           renewalDate: "2026-04-28",
           addedSessions: 10,
+          receivedAmount: 380000,
           note: "주 2회 유지로 재등록",
         },
       ],
@@ -192,6 +209,7 @@
       location: "온라인 (Zoom)",
       durationMinutes: 50,
       tuitionFee: 480000,
+      receivedAmountTotal: 480000,
       contact: "010-2222-3344",
       inflowChannel: "지인 추천",
       region: "경기 성남시",
@@ -215,6 +233,7 @@
       location: "강남 본원 201호",
       durationMinutes: 45,
       tuitionFee: 350000,
+      receivedAmountTotal: 350000,
       contact: "010-9876-5432",
       inflowChannel: "네이버 검색",
       region: "서울 서초구",
@@ -245,6 +264,11 @@
     return out;
   }
 
+  function sanitizeNonNegativeAmount(value, fallback = 0) {
+    const n = Number(value);
+    return Number.isFinite(n) && n >= 0 ? Math.round(n) : fallback;
+  }
+
   function normalizeRenewalHistory(entries) {
     if (!Array.isArray(entries)) return [];
     return entries
@@ -256,11 +280,56 @@
           id: String(item.id || `renewal-${idx + 1}`),
           renewalDate: String(item.renewalDate || "").trim(),
           addedSessions: Math.round(addedSessions),
+          receivedAmount: sanitizeNonNegativeAmount(item.receivedAmount, 0),
           note: String(item.note || "").trim(),
         };
       })
       .filter(Boolean)
       .sort((a, b) => String(b.renewalDate || "").localeCompare(String(a.renewalDate || "")));
+  }
+
+  function normalizeStringArray(values) {
+    if (!Array.isArray(values)) return [];
+    return Array.from(
+      new Set(
+        values
+          .map((item) => String(item || "").trim())
+          .filter(Boolean)
+      )
+    );
+  }
+
+  function normalizeStudentTab(tab) {
+    if (!tab || typeof tab !== "object") return null;
+    const name = String(tab.name || "").trim();
+    if (!name) return null;
+    const sortOrder = Number.isFinite(Number(tab.sortOrder)) ? Number(tab.sortOrder) : Date.now();
+    return {
+      id: String(tab.id || "").trim(),
+      name,
+      sortOrder,
+    };
+  }
+
+  function normalizeRefundDraft(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    const toAmount = (value) => {
+      const n = Number(value);
+      return Number.isFinite(n) && n >= 0 ? Math.round(n) : 0;
+    };
+    return {
+      paymentGroupId: String(raw.paymentGroupId || "").trim(),
+      lessonDescription: String(raw.lessonDescription || "").trim(),
+      regularPrice: toAmount(raw.regularPrice),
+      eventPrice: toAmount(raw.eventPrice),
+      perSessionPrice: toAmount(raw.perSessionPrice),
+      refundAmount: toAmount(raw.refundAmount),
+      bankName: String(raw.bankName || "").trim(),
+      accountNumber: String(raw.accountNumber || "").trim(),
+      accountHolder: String(raw.accountHolder || "").trim(),
+      issueDate: String(raw.issueDate || "").trim(),
+      signerName: String(raw.signerName || "").trim(),
+    };
   }
 
   // 신규/이전 버전 호환을 위해 누락된 필드를 안전한 기본값으로 채워 줍니다.
@@ -290,12 +359,18 @@
 
   function normalizeStudent(s) {
     if (!s || typeof s !== "object") return s;
+    const tuitionFee = sanitizeNonNegativeAmount(s.tuitionFee, 0);
+    const receivedAmountTotal = sanitizeNonNegativeAmount(s.receivedAmountTotal, tuitionFee);
     return Object.assign({}, s, {
       birthDate: String(s.birthDate || "").trim(),
+      tuitionFee,
+      receivedAmountTotal,
       scheduleDays: Array.isArray(s.scheduleDays) ? s.scheduleDays : [],
       scheduleDayTimes: normalizeScheduleDayTimesMap(s.scheduleDayTimes),
+      studentTabIds: normalizeStringArray(s.studentTabIds),
       sessionRecords: normalizeSessionRecords(s.sessionRecords),
       renewalHistory: normalizeRenewalHistory(s.renewalHistory),
+      refundDraft: normalizeRefundDraft(s.refundDraft),
     });
   }
 
@@ -319,16 +394,184 @@
     return normalizeRenewalHistory(student && student.renewalHistory).length;
   }
 
+  function getStudentReceivedAmountTotal(student) {
+    if (!student) return 0;
+    const receivedAmountTotal = sanitizeNonNegativeAmount(student.receivedAmountTotal, -1);
+    if (receivedAmountTotal >= 0) return receivedAmountTotal;
+    return sanitizeNonNegativeAmount(student.tuitionFee, 0);
+  }
+
+  function getStudentUnitPrice(student) {
+    const sessions = Math.max(0, Number(student && student.registeredSessions) || 0);
+    if (sessions <= 0) return 0;
+    return Math.round(getStudentReceivedAmountTotal(student) / sessions);
+  }
+
+  function getInitialPaymentAmount(student) {
+    const totalReceivedAmount = getStudentReceivedAmountTotal(student);
+    const renewalReceivedAmount = normalizeRenewalHistory(student && student.renewalHistory).reduce(
+      (sum, entry) => sum + sanitizeNonNegativeAmount(entry.receivedAmount, 0),
+      0
+    );
+    const derivedInitialAmount = totalReceivedAmount - renewalReceivedAmount;
+    if (derivedInitialAmount > 0) return derivedInitialAmount;
+    return sanitizeNonNegativeAmount(student && student.tuitionFee, totalReceivedAmount);
+  }
+
   function formatRenewalHistoryForDisplay(entries) {
     const list = normalizeRenewalHistory(entries);
     if (list.length === 0) return "-";
     return list
       .map((item) => {
         const dateText = item.renewalDate ? formatDate(item.renewalDate) : "날짜 미입력";
+        const amountText = item.receivedAmount > 0 ? ` / ${formatCurrency(item.receivedAmount)}` : "";
         const noteText = item.note ? ` · ${item.note}` : "";
-        return `${dateText} / ${formatNumber(item.addedSessions)}회 추가${noteText}`;
+        return `${dateText} / ${formatNumber(item.addedSessions)}회 추가${amountText}${noteText}`;
       })
       .join("\n");
+  }
+
+  function getStudentPaymentGroups(student) {
+    const normalized = normalizeStudent(student);
+    const sessionSlots = getStudentSessionSlots(normalized);
+    const totalSessions = sessionSlots.length;
+    const renewalsAsc = [...normalized.renewalHistory].sort((a, b) =>
+      String(a.renewalDate || "").localeCompare(String(b.renewalDate || ""))
+    );
+    const renewalTotal = renewalsAsc.reduce(
+      (sum, entry) => sum + Math.max(0, Number(entry.addedSessions) || 0),
+      0
+    );
+    const baseSessions = Math.max(0, totalSessions - renewalTotal);
+    const groupsSource = [];
+
+    if (baseSessions > 0 || renewalsAsc.length === 0) {
+      groupsSource.push({
+        id: "initial",
+        kind: "initial",
+        paymentDate: String(normalized.registrationDate || "").trim(),
+        totalSessions: baseSessions,
+        receivedAmount: getInitialPaymentAmount(normalized),
+      });
+    }
+
+    renewalsAsc.forEach((entry) => {
+      groupsSource.push({
+        id: String(entry.id || generateId()),
+        kind: "renewal",
+        paymentDate: String(entry.renewalDate || "").trim(),
+        totalSessions: Math.max(0, Number(entry.addedSessions) || 0),
+        receivedAmount: sanitizeNonNegativeAmount(entry.receivedAmount, 0),
+      });
+    });
+
+    let cursor = 1;
+    return groupsSource
+      .filter((group) => group.totalSessions > 0)
+      .map((group, idx) => {
+        const startSessionNumber = cursor;
+        const endSessionNumber = cursor + group.totalSessions - 1;
+        const slots = sessionSlots.slice(startSessionNumber - 1, endSessionNumber).map((slot, slotIdx) =>
+          Object.assign({}, slot, {
+            localSessionNumber: slotIdx + 1,
+            paymentGroupId: group.id,
+            paymentGroupOrder: idx + 1,
+            totalSessionsInGroup: group.totalSessions,
+          })
+        );
+        cursor = endSessionNumber + 1;
+        return Object.assign({}, group, {
+          order: idx + 1,
+          startSessionNumber,
+          endSessionNumber,
+          slots,
+          completedCount: slots.filter((slot) => slot.isCompleted).length,
+        });
+      });
+  }
+
+  function getStudentPaymentGroupById(student, groupId) {
+    const groups = getStudentPaymentGroups(student);
+    if (groups.length === 0) return null;
+    return groups.find((group) => group.id === groupId) || groups[0] || null;
+  }
+
+  function getSelectedPaymentGroupId(student, groups) {
+    const list = Array.isArray(groups) ? groups : getStudentPaymentGroups(student);
+    if (list.length === 0) return "";
+    const selectedId = state.selectedPaymentGroupByStudent[student.id];
+    return list.some((group) => group.id === selectedId) ? selectedId : list[0].id;
+  }
+
+  function selectStudentPaymentGroup(studentId, groupId) {
+    const student = state.students.find((item) => item.id === studentId);
+    if (!student) return;
+    const groups = getStudentPaymentGroups(student);
+    const target = groups.find((group) => group.id === groupId);
+    if (!target) return;
+    state.selectedPaymentGroupByStudent[studentId] = target.id;
+    const activeSessionNumber = state.expandedSessionPanelByStudent[studentId];
+    const hasActiveInGroup = target.slots.some((slot) => slot.sessionNumber === activeSessionNumber);
+    if (!hasActiveInGroup) {
+      delete state.expandedSessionPanelByStudent[studentId];
+    }
+    render();
+  }
+
+  function getStudentTabCount(tabId) {
+    if (tabId === "all") return state.students.length;
+    return state.students.filter((student) => normalizeStringArray(student.studentTabIds).includes(tabId)).length;
+  }
+
+  function getStudentTabNames(student) {
+    const ids = normalizeStringArray(student && student.studentTabIds);
+    if (ids.length === 0) return [];
+    const tabMap = new Map(
+      (state.studentTabs || [])
+        .map(normalizeStudentTab)
+        .filter(Boolean)
+        .map((tab) => [tab.id, tab.name])
+    );
+    return ids.map((id) => tabMap.get(id)).filter(Boolean);
+  }
+
+  function buildSessionRangeLabel(numbers) {
+    const list = Array.from(
+      new Set(
+        (Array.isArray(numbers) ? numbers : [])
+          .map((value) => Number(value))
+          .filter((value) => Number.isInteger(value) && value > 0)
+      )
+    ).sort((a, b) => a - b);
+    if (list.length === 0) return "-";
+    if (list.length === 1) return `${formatNumber(list[0])}회차`;
+    return list.map((value) => `${formatNumber(value)}회차`).join("/");
+  }
+
+  function buildRefundLessonEntries(student, paymentGroupId) {
+    const group = getStudentPaymentGroupById(student, paymentGroupId);
+    if (!group) return [];
+    const completedSlots = group.slots.filter((slot) => slot.isCompleted && slot.sessionDate);
+    if (completedSlots.length === 0) return [];
+
+    const entries = [];
+    let current = null;
+    completedSlots.forEach((slot) => {
+      if (current && current.sessionDate === slot.sessionDate) {
+        current.localSessionNumbers.push(slot.localSessionNumber);
+        return;
+      }
+      if (current) entries.push(current);
+      current = {
+        sessionDate: slot.sessionDate,
+        localSessionNumbers: [slot.localSessionNumber],
+      };
+    });
+    if (current) entries.push(current);
+    return entries.map((entry) => ({
+      label: buildSessionRangeLabel(entry.localSessionNumbers),
+      sessionDate: entry.sessionDate,
+    }));
   }
 
   function normalizeContactDigits(raw) {
@@ -490,6 +733,7 @@
     }
 
     const addedSessions = Math.max(0, Math.round(Number(entry && entry.addedSessions) || 0));
+    const receivedAmount = sanitizeNonNegativeAmount(entry && entry.receivedAmount, 0);
     if (addedSessions <= 0) {
       showToast("추가할 회차를 1회 이상 입력해 주세요.");
       return;
@@ -499,19 +743,23 @@
       id: generateId(),
       renewalDate: String((entry && entry.renewalDate) || "").trim() || todayISO(),
       addedSessions,
+      receivedAmount,
       note: String((entry && entry.note) || "").trim(),
     };
     const nextHistory = normalizeRenewalHistory([renewalEntry, ...(student.renewalHistory || [])]);
     const nextRegisteredSessions = Math.max(0, Number(student.registeredSessions) || 0) + addedSessions;
+    const nextReceivedAmountTotal = getStudentReceivedAmountTotal(student) + receivedAmount;
 
     student.renewalHistory = nextHistory;
     student.registeredSessions = nextRegisteredSessions;
+    student.receivedAmountTotal = nextReceivedAmountTotal;
     render();
 
     try {
       await updateStudent(studentId, {
         renewalHistory: nextHistory,
         registeredSessions: nextRegisteredSessions,
+        receivedAmountTotal: nextReceivedAmountTotal,
       });
       showToast(`재등록 ${formatNumber(addedSessions)}회를 추가했습니다.`);
     } catch (err) {
@@ -542,6 +790,7 @@
     }
 
     const addedSessions = Math.max(0, Math.round(Number(patch && patch.addedSessions) || 0));
+    const receivedAmount = sanitizeNonNegativeAmount(patch && patch.receivedAmount, 0);
     if (addedSessions <= 0) {
       showToast("추가할 회차를 1회 이상 입력해 주세요.");
       return;
@@ -551,6 +800,7 @@
       id: target.id,
       renewalDate: String((patch && patch.renewalDate) || "").trim() || todayISO(),
       addedSessions,
+      receivedAmount,
       note: String((patch && patch.note) || "").trim(),
     };
     const nextHistory = normalizeRenewalHistory(
@@ -560,9 +810,14 @@
       0,
       (Number(student.registeredSessions) || 0) - Number(target.addedSessions || 0) + addedSessions
     );
+    const nextReceivedAmountTotal = Math.max(
+      0,
+      getStudentReceivedAmountTotal(student) - sanitizeNonNegativeAmount(target.receivedAmount, 0) + receivedAmount
+    );
 
     student.renewalHistory = nextHistory;
     student.registeredSessions = nextRegisteredSessions;
+    student.receivedAmountTotal = nextReceivedAmountTotal;
     delete state.editingRenewalEntryByStudent[studentId];
     render();
 
@@ -570,6 +825,7 @@
       await updateStudent(studentId, {
         renewalHistory: nextHistory,
         registeredSessions: nextRegisteredSessions,
+        receivedAmountTotal: nextReceivedAmountTotal,
       });
       showToast("재등록 기록이 수정되었습니다.");
     } catch (err) {
@@ -598,9 +854,14 @@
       0,
       (Number(student.registeredSessions) || 0) - Number(target.addedSessions || 0)
     );
+    const nextReceivedAmountTotal = Math.max(
+      0,
+      getStudentReceivedAmountTotal(student) - sanitizeNonNegativeAmount(target.receivedAmount, 0)
+    );
 
     student.renewalHistory = nextHistory;
     student.registeredSessions = nextRegisteredSessions;
+    student.receivedAmountTotal = nextReceivedAmountTotal;
     if (state.editingRenewalEntryByStudent[studentId] === entryId) {
       delete state.editingRenewalEntryByStudent[studentId];
     }
@@ -610,6 +871,7 @@
       await updateStudent(studentId, {
         renewalHistory: nextHistory,
         registeredSessions: nextRegisteredSessions,
+        receivedAmountTotal: nextReceivedAmountTotal,
       });
       showToast("재등록 기록이 삭제되었습니다.");
     } catch (err) {
@@ -999,6 +1261,48 @@
         state.expandedRowIds.forEach((id) => {
           if (!valid.has(id)) state.expandedRowIds.delete(id);
         });
+        Object.keys(state.selectedPaymentGroupByStudent).forEach((id) => {
+          if (!valid.has(id)) delete state.selectedPaymentGroupByStudent[id];
+        });
+        Object.keys(state.expandedSessionPanelByStudent).forEach((id) => {
+          if (!valid.has(id)) delete state.expandedSessionPanelByStudent[id];
+        });
+        Object.keys(state.editingRenewalEntryByStudent).forEach((id) => {
+          if (!valid.has(id)) delete state.editingRenewalEntryByStudent[id];
+        });
+      }
+      render();
+    });
+  }
+
+  function subscribeToStudentTabs() {
+    if (!isDBReady() || typeof window.HaotingDB.subscribeStudentTabs !== "function") {
+      state.isStudentTabsLoading = false;
+      state.studentTabs = [];
+      return;
+    }
+    if (unsubscribeStudentTabs) {
+      unsubscribeStudentTabs();
+      unsubscribeStudentTabs = null;
+    }
+    state.isStudentTabsLoading = true;
+    unsubscribeStudentTabs = window.HaotingDB.subscribeStudentTabs((items, err) => {
+      if (err) {
+        showToast("학생 탭을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.");
+        state.isStudentTabsLoading = false;
+        render();
+        return;
+      }
+      state.studentTabs = (items || [])
+        .map(normalizeStudentTab)
+        .filter(Boolean)
+        .sort((a, b) => a.sortOrder - b.sortOrder);
+      state.isStudentTabsLoading = false;
+      if (
+        state.selectedStudentTabId !== "all" &&
+        !state.studentTabs.some((tab) => tab.id === state.selectedStudentTabId)
+      ) {
+        state.selectedStudentTabId = "all";
       }
       render();
     });
@@ -1032,6 +1336,10 @@
       unsubscribeStudents();
       unsubscribeStudents = null;
     }
+    if (unsubscribeStudentTabs) {
+      unsubscribeStudentTabs();
+      unsubscribeStudentTabs = null;
+    }
     if (unsubscribeCounselingRecords) {
       unsubscribeCounselingRecords();
       unsubscribeCounselingRecords = null;
@@ -1051,6 +1359,16 @@
   async function deleteStudent(id) {
     if (!isDBReady()) throw new Error("Firestore 가 준비되지 않았습니다.");
     return window.HaotingDB.deleteStudent(id);
+  }
+
+  async function createStudentTab(draft) {
+    if (!isDBReady()) throw new Error("Firestore 가 준비되지 않았습니다.");
+    return window.HaotingDB.createStudentTab(draft);
+  }
+
+  async function deleteStudentTab(id) {
+    if (!isDBReady()) throw new Error("Firestore 가 준비되지 않았습니다.");
+    return window.HaotingDB.deleteStudentTab(id);
   }
 
   async function createCounselingRecord(draft) {
@@ -1289,6 +1607,7 @@
 
     syncStudentDetailModal();
     syncCounselingDetailModal();
+    syncRefundSheetModal();
   }
 
   function bindSalesViewEvents() {
@@ -1893,7 +2212,28 @@
       },
     ];
 
-    const filteredStudents = applyFilters(state.students, state.filter, state.keyword);
+    const baseFilteredStudents = applyFilters(
+      state.students,
+      state.filter,
+      state.keyword,
+      state.selectedStudentTabId,
+      "all"
+    );
+    const filteredStudents = applyFilters(
+      state.students,
+      state.filter,
+      state.keyword,
+      state.selectedStudentTabId,
+      state.courseTrackFilter
+    );
+    const sortedFilteredStudents = sortStudents(filteredStudents, state.studentSort);
+    const sortOptionsHtml = STUDENT_SORT_OPTIONS.map(
+      (option) => `
+        <option value="${option.value}"${state.studentSort === option.value ? " selected" : ""}>
+          ${option.label}
+        </option>
+      `
+    ).join("");
 
     return `
       <section class="mb-6 flex flex-col gap-1 md:flex-row md:items-end md:justify-between">
@@ -1941,6 +2281,10 @@
           .join("")}
       </section>
 
+      ${renderStudentTabsBar()}
+
+      ${renderStudentTrackFilterBar(baseFilteredStudents)}
+
       <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <div class="flex flex-col gap-3 border-b border-slate-200 px-4 py-4 md:flex-row md:items-center md:justify-between md:px-6">
           <div class="flex items-center gap-2">
@@ -1962,19 +2306,27 @@
               현재 수강 중인 학생만 보기
             </label>
             <span class="hidden text-xs text-slate-400 sm:inline">
-              · 표시 ${formatNumber(filteredStudents.length)}명 / 전체 ${formatNumber(total)}명
+              · 표시 ${formatNumber(sortedFilteredStudents.length)}명 / 전체 ${formatNumber(total)}명
             </span>
           </div>
 
-          <div class="relative w-full md:w-72">
-            <i class="fa-solid fa-magnifying-glass pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
-            <input
-              id="search-input"
-              type="search"
-              value="${escapeHtml(state.keyword)}"
-              placeholder="이름·강사·연락처·커리큘럼 검색"
-              class="form-input w-full"
-            />
+          <div class="flex w-full flex-col gap-3 md:w-auto md:flex-row md:items-center">
+            <div class="w-full md:w-52">
+              <label class="sr-only" for="student-sort-select">학생 정렬</label>
+              <select id="student-sort-select" class="form-input w-full text-sm">
+                ${sortOptionsHtml}
+              </select>
+            </div>
+            <div class="relative w-full md:w-72">
+              <i class="fa-solid fa-magnifying-glass pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
+              <input
+                id="search-input"
+                type="search"
+                value="${escapeHtml(state.keyword)}"
+                placeholder="이름·강사·연락처·커리큘럼 검색"
+                class="form-input w-full"
+              />
+            </div>
           </div>
         </div>
 
@@ -1982,10 +2334,76 @@
           ${
             state.isStudentsLoading
               ? renderTableLoading()
-              : filteredStudents.length === 0
+              : sortedFilteredStudents.length === 0
                 ? renderEmpty()
-                : renderStudentTable(filteredStudents)
+                : renderStudentTable(sortedFilteredStudents)
           }
+        </div>
+      </section>
+    `;
+  }
+
+  function getCurriculumTrack(curriculum) {
+    const value = String(curriculum || "").trim().toLowerCase();
+    if (!value) return "other";
+    if (value.includes("hsk") || value.includes("자격증")) return "certification";
+    if (value.includes("회화")) return "conversation";
+    if (
+      value.includes("유아") ||
+      value.includes("초") ||
+      value.includes("어린이") ||
+      value.includes("기초") ||
+      value.includes("step")
+    ) {
+      return "basic";
+    }
+    return "other";
+  }
+
+  function countStudentsByTrack(students, trackKey) {
+    if (trackKey === "all") return Array.isArray(students) ? students.length : 0;
+    return (Array.isArray(students) ? students : []).filter(
+      (student) => getCurriculumTrack(student.curriculum) === trackKey
+    ).length;
+  }
+
+  function renderStudentTrackFilterBar(students) {
+    const options = [
+      { key: "all", label: "전체" },
+      { key: "basic", label: "기초" },
+      { key: "conversation", label: "회화" },
+      { key: "certification", label: "자격증" },
+    ];
+    return `
+      <section class="mb-4 rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm md:px-6">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p class="text-sm font-semibold text-slate-900">수강 분류 필터</p>
+            <p class="mt-1 text-xs text-slate-500">기초, 회화, 자격증 기준으로 학생 목록만 빠르게 골라 볼 수 있습니다.</p>
+          </div>
+          <div class="flex flex-wrap gap-2">
+          ${options
+            .map((item) => {
+              const isActive = state.courseTrackFilter === item.key;
+              return `
+                <button
+                  type="button"
+                  class="student-track-filter-btn inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium transition ${
+                    isActive
+                      ? "border-brand-500 bg-brand-50 text-brand-700"
+                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                  }"
+                  data-track-filter="${item.key}"
+                >
+                  <span>${item.label}</span>
+                  <span class="inline-flex min-w-[1.5rem] items-center justify-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">
+                    ${formatNumber(countStudentsByTrack(students, item.key))}
+                  </span>
+                </button>
+              `;
+            })
+            .join("")}
+          </div>
         </div>
       </section>
     `;
@@ -2034,6 +2452,8 @@
     const isExpanded = state.expandedRowIds.has(s.id);
     const completedSessions = getStudentSessionCount(s);
     const renewalCount = getStudentRenewalCount(s);
+    const unitPrice = getStudentUnitPrice(s);
+    const receivedAmountTotal = getStudentReceivedAmountTotal(s);
     const statusBadge = s.isActive
       ? '<span class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 md:px-2.5 md:text-xs"><i class="fa-solid fa-circle text-[6px]"></i>수강 중</span>'
       : '<span class="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 md:px-2.5 md:text-xs"><i class="fa-solid fa-circle text-[6px]"></i>휴원·퇴원</span>';
@@ -2060,6 +2480,9 @@
         <td class="whitespace-nowrap px-4 py-3.5 text-right tabular-nums text-slate-700 md:px-6">
           <div class="flex flex-col items-end">
             <span>${formatNumber(s.registeredSessions || 0)}회</span>
+            <span class="mt-0.5 text-[11px] text-slate-400">1회당 ${escapeHtml(
+              formatCurrencyOrDash(unitPrice)
+            )} · 총액 ${escapeHtml(formatCurrencyOrDash(receivedAmountTotal))}</span>
             <span class="mt-0.5 text-[11px] text-slate-400">${formatNumber(completedSessions)}회 진행 · 재등록 ${formatNumber(renewalCount)}회</span>
           </div>
         </td>
@@ -2115,6 +2538,7 @@
           { label: "학생 이름", value: student.name },
           { label: "생년월일", value: formatDate(student.birthDate) },
           { label: "담당 강사", value: student.assignedInstructor },
+          { label: "학생 탭", value: getStudentTabNames(student).join(", ") || "-" },
           { label: "연락처", value: student.contact },
           { label: "지역", value: student.region },
           { label: "수업장소", value: student.location },
@@ -2128,6 +2552,8 @@
           { label: "등록 횟수", value: formatCountWithUnit(student.registeredSessions, "회") },
           { label: "수업 시간", value: formatCountWithUnit(student.durationMinutes, "분") },
           { label: "수업료", value: formatCurrencyOrDash(student.tuitionFee) },
+          { label: "받은 금액 총액", value: formatCurrencyOrDash(getStudentReceivedAmountTotal(student)) },
+          { label: "1회차 수업 비용", value: formatCurrencyOrDash(getStudentUnitPrice(student)) },
           { label: "등록일", value: formatDate(student.registrationDate) },
           { label: "마지막 수강일", value: formatDate(student.lastClassDate) },
           {
@@ -2247,6 +2673,111 @@
     `;
   }
 
+  function renderStudentTabsBar() {
+    const tabs = [{ id: "all", name: "전체" }, ...state.studentTabs];
+    const isLoading = state.isStudentTabsLoading;
+    return `
+      <section class="mb-4 rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm md:px-6">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div class="min-w-0">
+            <p class="text-sm font-semibold text-slate-900">학생 탭</p>
+            <p class="mt-1 text-xs text-slate-500">학생을 여러 탭으로 구분해 관리할 수 있습니다.</p>
+          </div>
+          <form id="student-tab-create-form" class="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+            <input
+              id="student-tab-name-input"
+              type="text"
+              maxlength="20"
+              class="form-input w-full sm:w-56"
+              placeholder="새 탭 이름"
+            />
+            <button
+              type="submit"
+              class="inline-flex items-center justify-center gap-2 rounded-lg bg-brand-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-brand-700"
+            >
+              <i class="fa-solid fa-plus"></i>
+              탭 추가
+            </button>
+          </form>
+        </div>
+        <div class="mt-3 flex flex-wrap gap-2">
+          ${
+            isLoading
+              ? `<span class="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">탭을 불러오는 중...</span>`
+              : tabs
+                  .map((tab) => {
+                    const isActive = state.selectedStudentTabId === tab.id;
+                    const count = getStudentTabCount(tab.id);
+                    return `
+                      <div class="student-management-tab-wrap ${isActive ? "is-active" : ""}">
+                        <button
+                          type="button"
+                          class="student-management-tab"
+                          data-tab-id="${escapeHtml(tab.id)}"
+                        >
+                          <span>${escapeHtml(tab.name)}</span>
+                          <span class="student-management-tab-count">${formatNumber(count)}</span>
+                        </button>
+                        ${
+                          tab.id !== "all"
+                            ? `<button
+                                type="button"
+                                class="student-management-tab-delete"
+                                data-tab-id="${escapeHtml(tab.id)}"
+                                title="${escapeHtml(tab.name)} 탭 삭제"
+                                aria-label="${escapeHtml(tab.name)} 탭 삭제"
+                              >
+                                <i class="fa-solid fa-xmark"></i>
+                              </button>`
+                            : ""
+                        }
+                      </div>
+                    `;
+                  })
+                  .join("")
+          }
+        </div>
+      </section>
+    `;
+  }
+
+  function renderStudentTabSelectionOptions(selectedIds) {
+    const selected = new Set(normalizeStringArray(selectedIds));
+    if (state.studentTabs.length === 0) {
+      return `
+        <div class="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
+          아직 만든 학생 탭이 없습니다. 학생 관리 화면 상단에서 탭을 먼저 추가해 주세요.
+        </div>
+      `;
+    }
+    return `
+      <div class="student-form-tab-grid">
+        ${state.studentTabs
+          .map(
+            (tab) => `
+          <label class="student-form-tab-option">
+            <input
+              type="checkbox"
+              name="studentTabIds"
+              value="${escapeHtml(tab.id)}"
+              class="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+              ${selected.has(tab.id) ? "checked" : ""}
+            />
+            <span>${escapeHtml(tab.name)}</span>
+          </label>
+        `
+          )
+          .join("")}
+      </div>
+    `;
+  }
+
+  function renderStudentTabSelectionInForm(form, selectedIds) {
+    const wrap = document.getElementById("f-student-tabs-wrap");
+    if (!form || !wrap) return;
+    wrap.innerHTML = renderStudentTabSelectionOptions(selectedIds);
+  }
+
   function fillStudentDetailModal(student) {
     const titleEl = document.getElementById("student-detail-modal-title");
     const subtitleEl = document.getElementById("student-detail-modal-subtitle");
@@ -2256,6 +2787,10 @@
     titleEl.textContent = `${student.name || "학생"} 상세 정보`;
     subtitleEl.textContent = "학생 관리에 입력된 정보를 읽기 전용으로 확인합니다. 수정은 목록의 수정 버튼에서 가능합니다.";
     bodyEl.innerHTML = renderStudentDetailModalContent(student);
+    const refundBtn = document.getElementById("student-detail-refund-btn");
+    if (refundBtn) {
+      refundBtn.dataset.studentId = student.id || "";
+    }
     bodyEl.scrollTop = 0;
   }
 
@@ -2267,15 +2802,22 @@
     const renewalHistory = normalizeRenewalHistory(s.renewalHistory);
     const renewalCount = renewalHistory.length;
     const editingRenewal = getEditingRenewalEntry(s.id, renewalHistory);
+    const paymentGroups = getStudentPaymentGroups(s);
+    const selectedPaymentGroupId = getSelectedPaymentGroupId(s, paymentGroups);
+    const currentPaymentGroup =
+      paymentGroups.find((group) => group.id === selectedPaymentGroupId) || paymentGroups[0] || null;
+    const visibleSessionSlots = currentPaymentGroup ? currentPaymentGroup.slots : sessionSlots;
     const activeSessionNumber = state.expandedSessionPanelByStudent[s.id] || null;
     const activeSlot =
-      sessionSlots.find((item) => item.sessionNumber === activeSessionNumber) || null;
+      visibleSessionSlots.find((item) => item.sessionNumber === activeSessionNumber) || null;
     const items = [
       { label: "생년월일", value: formatDate(s.birthDate) },
       { label: "지역", value: s.region },
       { label: "수업장소", value: s.location },
       { label: "연락처", value: s.contact },
       { label: "커리큘럼", value: s.curriculum },
+      { label: "받은 금액 총액", value: formatCurrencyOrDash(getStudentReceivedAmountTotal(s)) },
+      { label: "1회차 수업 비용", value: formatCurrencyOrDash(getStudentUnitPrice(s)) },
       {
         label: "수업 요일",
         value:
@@ -2321,9 +2863,9 @@
               <div class="session-manager-toolbar mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <p class="text-sm font-semibold text-slate-900">회차 관리</p>
-                  <p class="mt-1 text-xs text-slate-500">상단 회차 버튼을 눌러 각 회차의 진행일과 안내 문구를 관리하세요.</p>
+                  <p class="mt-1 text-xs text-slate-500">결제일 버튼으로 회차 묶음을 나눠 보고, 선택한 묶음 안에서 회차를 관리하세요.</p>
                 </div>
-                <div class="flex flex-wrap items-center gap-2.5 text-[11px]">
+                <div class="flex flex-wrap items-center justify-end gap-2.5 text-[11px]">
                   <span class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700">
                     완료 ${formatNumber(completedCount)}회
                   </span>
@@ -2333,15 +2875,23 @@
                   <span class="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2.5 py-1 font-medium text-sky-700">
                     재등록 ${formatNumber(renewalCount)}회
                   </span>
+                  <button
+                    type="button"
+                    class="action-refund-sheet inline-flex items-center gap-2 rounded-lg border border-brand-200 bg-white px-3 py-1.5 text-xs font-semibold text-brand-700 transition hover:bg-brand-50"
+                    data-id="${escapeHtml(s.id)}"
+                  >
+                    <i class="fa-solid fa-file-invoice"></i>
+                    환불 내역서
+                  </button>
                 </div>
               </div>
               <div class="renewal-manager-card mb-4 rounded-lg border border-slate-200 bg-slate-50/80 p-4">
                 <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                   <div>
                     <p class="text-sm font-semibold text-slate-900">재등록 기록</p>
-                    <p class="mt-1 text-xs text-slate-500">재등록할 때 추가 회차를 기록하면 남은 회차와 이력이 함께 관리됩니다.</p>
+                    <p class="mt-1 text-xs text-slate-500">재등록할 때 추가 회차와 결제 금액을 기록하면 남은 회차, 총액, 가격 변경 이력이 함께 관리됩니다.</p>
                   </div>
-                  <form class="renewal-form grid gap-2 sm:grid-cols-[120px_120px_minmax(0,1fr)_auto]" data-student-id="${escapeHtml(
+                  <form class="renewal-form grid gap-2 sm:grid-cols-[120px_120px_140px_minmax(0,1fr)_auto]" data-student-id="${escapeHtml(
                     s.id
                   )}">
                     <input type="hidden" name="renewalEntryId" value="${escapeHtml(
@@ -2360,6 +2910,15 @@
                       class="form-input text-sm"
                       placeholder="추가 회차"
                       value="${escapeHtml(editingRenewal ? String(editingRenewal.addedSessions || "") : "")}"
+                    />
+                    <input
+                      type="number"
+                      name="receivedAmount"
+                      min="0"
+                      step="1000"
+                      class="form-input text-sm"
+                      placeholder="결제 금액"
+                      value="${escapeHtml(editingRenewal ? String(editingRenewal.receivedAmount || "") : "")}"
                     />
                     <input
                       type="text"
@@ -2401,7 +2960,11 @@
                           <div class="min-w-0">
                             <p class="font-medium text-slate-800">${escapeHtml(
                               formatDate(entry.renewalDate)
-                            )} · ${escapeHtml(formatCountWithUnit(entry.addedSessions, "회 추가"))}</p>
+                            )} · ${escapeHtml(formatCountWithUnit(entry.addedSessions, "회 추가"))}${
+                              entry.receivedAmount > 0
+                                ? ` · ${escapeHtml(formatCurrency(entry.receivedAmount))}`
+                                : ""
+                            }</p>
                             ${
                               entry.note
                                 ? `<p class="mt-1 text-xs text-slate-500">${escapeHtml(entry.note)}</p>`
@@ -2445,8 +3008,62 @@
                       등록 횟수를 먼저 입력하면 회차 체크가 활성화됩니다.
                     </div>`
                   : `
+                    ${
+                      paymentGroups.length > 0
+                        ? `<div class="payment-group-wrap mb-4 rounded-xl border border-slate-200 bg-white/80 p-3">
+                            <div class="payment-group-header flex flex-wrap items-center justify-between gap-3">
+                              <div class="payment-group-copy">
+                                <p class="payment-group-title text-xs font-semibold uppercase tracking-wider text-slate-400">결제일별 회차</p>
+                                <p class="payment-group-desc mt-1 text-xs text-slate-500">선택한 결제 묶음 안에서 회차가 1회차부터 다시 시작됩니다.</p>
+                              </div>
+                              ${
+                                currentPaymentGroup
+                                  ? `<div class="payment-group-summary text-right text-xs text-slate-500">
+                                      <p>선택 결제일: <span class="font-semibold text-slate-700">${escapeHtml(
+                                        formatDate(currentPaymentGroup.paymentDate) || "날짜 미입력"
+                                      )}</span></p>
+                                      <p class="mt-1">${escapeHtml(
+                                        formatCountWithUnit(currentPaymentGroup.totalSessions, "회")
+                                      )} · 완료 ${formatNumber(currentPaymentGroup.completedCount)}회</p>
+                                      <p class="mt-1">결제 금액: <span class="font-semibold text-slate-700">${escapeHtml(
+                                        formatCurrencyOrDash(currentPaymentGroup.receivedAmount)
+                                      )}</span></p>
+                                    </div>`
+                                  : ""
+                              }
+                            </div>
+                            <div class="mt-3 flex flex-wrap gap-2">
+                              ${paymentGroups
+                                .map((group) => {
+                                  const isActiveGroup = currentPaymentGroup && currentPaymentGroup.id === group.id;
+                                  return `
+                                    <button
+                                      type="button"
+                                      class="payment-group-button inline-flex min-h-[2.4rem] min-w-[2.75rem] items-center justify-center rounded-full border px-3 py-1.5 text-sm font-semibold transition ${
+                                        isActiveGroup
+                                          ? "border-brand-500 bg-brand-600 text-white shadow-sm"
+                                          : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                                      }"
+                                      data-student-id="${escapeHtml(s.id)}"
+                                      data-group-id="${escapeHtml(group.id)}"
+                                      title="${escapeHtml(
+                                        `결제 ${group.order} · ${formatDate(group.paymentDate) || "날짜 미입력"}`
+                                      )}"
+                                      aria-label="${escapeHtml(
+                                        `결제 ${group.order} 선택`
+                                      )}"
+                                    >
+                                      ${formatNumber(group.order)}
+                                    </button>
+                                  `;
+                                })
+                                .join("")}
+                            </div>
+                          </div>`
+                        : ""
+                    }
                     <div class="session-tabs-wrap mb-4 flex flex-wrap gap-2.5">
-                      ${sessionSlots
+                      ${visibleSessionSlots
                         .map((slot) => {
                           const isActive = activeSessionNumber === slot.sessionNumber;
                           const tabStateClass = isActive
@@ -2463,7 +3080,7 @@
                               data-student-id="${escapeHtml(s.id)}"
                               data-session-number="${slot.sessionNumber}"
                             >
-                              <span>${formatNumber(slot.sessionNumber)}회차</span>
+                              <span>${formatNumber(slot.localSessionNumber || slot.sessionNumber)}회차</span>
                             </button>
                           `;
                         })
@@ -2490,8 +3107,17 @@
                               <div class="min-w-0">
                                 <div class="flex flex-wrap items-center gap-2">
                                   <span class="text-sm font-semibold text-slate-900">${formatNumber(
-                                    activeSlot.sessionNumber
+                                    activeSlot.localSessionNumber || activeSlot.sessionNumber
                                   )}회차</span>
+                                  ${
+                                    currentPaymentGroup
+                                      ? `<span class="inline-flex items-center rounded-full bg-white px-2 py-1 text-[11px] font-medium text-slate-500">
+                                          결제 ${formatNumber(currentPaymentGroup.order)} · 전체 ${formatNumber(
+                                            activeSlot.sessionNumber
+                                          )}회차
+                                        </span>`
+                                      : ""
+                                  }
                                   <label class="session-complete-toggle inline-flex cursor-pointer items-center gap-2 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700">
                                     <input
                                       type="checkbox"
@@ -2974,14 +3600,41 @@
     `;
   }
 
+  function sortStudents(list, sortKey) {
+    const next = Array.isArray(list) ? [...list] : [];
+    if (sortKey === "session-price-desc") {
+      next.sort(
+        (a, b) =>
+          getStudentUnitPrice(b) - getStudentUnitPrice(a) ||
+          String(a.name || "").localeCompare(String(b.name || ""), "ko")
+      );
+      return next;
+    }
+    if (sortKey === "session-price-asc") {
+      next.sort(
+        (a, b) =>
+          getStudentUnitPrice(a) - getStudentUnitPrice(b) ||
+          String(a.name || "").localeCompare(String(b.name || ""), "ko")
+      );
+      return next;
+    }
+    return next;
+  }
+
 
   /* ==========================================================
    * 6. 필터 / 검색
    * ========================================================== */
-  function applyFilters(list, filter, keyword) {
+  function applyFilters(list, filter, keyword, selectedTabId, courseTrackFilter) {
     let next = list;
     if (filter === "active") {
       next = next.filter((s) => s.isActive);
+    }
+    if (selectedTabId && selectedTabId !== "all") {
+      next = next.filter((s) => normalizeStringArray(s.studentTabIds).includes(selectedTabId));
+    }
+    if (courseTrackFilter && courseTrackFilter !== "all") {
+      next = next.filter((s) => getCurriculumTrack(s.curriculum) === courseTrackFilter);
     }
     const kw = (keyword || "").trim().toLowerCase();
     if (kw) {
@@ -3011,10 +3664,94 @@
       addBtn.addEventListener("click", () => openStudentModal(null));
     }
 
+    const studentTabCreateForm = document.getElementById("student-tab-create-form");
+    if (studentTabCreateForm) {
+      studentTabCreateForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const input = document.getElementById("student-tab-name-input");
+        const name = String(input?.value || "").trim();
+        if (!name) {
+          showToast("새 탭 이름을 입력해 주세요.");
+          input?.focus();
+          return;
+        }
+        const hasDuplicate = state.studentTabs.some(
+          (tab) => String(tab.name || "").trim().toLowerCase() === name.toLowerCase()
+        );
+        if (hasDuplicate) {
+          showToast("같은 이름의 학생 탭이 이미 있습니다.");
+          input?.focus();
+          return;
+        }
+        try {
+          const sortOrder =
+            state.studentTabs.length > 0
+              ? Math.max(...state.studentTabs.map((tab) => Number(tab.sortOrder) || 0)) + 1
+              : Date.now();
+          const createdId = await createStudentTab({ name, sortOrder });
+          if (createdId) state.selectedStudentTabId = createdId;
+          if (input) input.value = "";
+          showToast(`학생 탭 '${name}'을 추가했습니다.`);
+        } catch (err) {
+          console.error("[createStudentTab]", err);
+          showToast("학생 탭 추가에 실패했습니다. 잠시 후 다시 시도해 주세요.");
+        }
+      });
+    }
+
+    document.querySelectorAll(".student-management-tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tabId = String(btn.dataset.tabId || "all").trim() || "all";
+        state.selectedStudentTabId = tabId;
+        render();
+      });
+    });
+
+    document.querySelectorAll(".student-management-tab-delete").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const tabId = String(btn.dataset.tabId || "").trim();
+        const tab = state.studentTabs.find((item) => item.id === tabId);
+        if (!tabId || !tab) {
+          showToast("삭제할 학생 탭을 찾을 수 없습니다.");
+          return;
+        }
+        openConfirm({
+          title: "학생 탭을 삭제하시겠습니까?",
+          message: `'${tab.name}' 탭이 삭제되며, 소속 학생은 유지되고 이 탭 연결만 제거됩니다.`,
+          onConfirm: async () => {
+            try {
+              await deleteStudentTab(tabId);
+              showToast(`학생 탭 '${tab.name}'을 삭제했습니다.`);
+            } catch (err) {
+              console.error("[deleteStudentTab]", err);
+              showToast("학생 탭 삭제에 실패했습니다. 잠시 후 다시 시도해 주세요.");
+            }
+          },
+        });
+      });
+    });
+
     const toggleInput = document.getElementById("active-only-input");
     if (toggleInput) {
       toggleInput.addEventListener("change", (e) => {
         state.filter = e.target.checked ? "active" : "all";
+        render();
+      });
+    }
+
+    document.querySelectorAll(".student-track-filter-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.courseTrackFilter = String(btn.dataset.trackFilter || "all");
+        render();
+      });
+    });
+
+    const sortSelect = document.getElementById("student-sort-select");
+    if (sortSelect) {
+      sortSelect.addEventListener("change", () => {
+        state.studentSort = String(sortSelect.value || "default");
         render();
       });
     }
@@ -3073,12 +3810,21 @@
       });
     });
 
+    document.querySelectorAll(".action-refund-sheet").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openRefundSheetModal(btn.dataset.id);
+      });
+    });
+
     document.querySelectorAll(".renewal-form").forEach((formEl) => {
       formEl.addEventListener("submit", async (e) => {
         e.preventDefault();
         e.stopPropagation();
         const studentId = formEl.dataset.studentId;
         const addedSessions = Number(formEl.elements.addedSessions?.value || 0);
+        const receivedAmount = Number(formEl.elements.receivedAmount?.value || 0);
         const renewalDate = String(formEl.elements.renewalDate?.value || "").trim() || todayISO();
         const note = String(formEl.elements.note?.value || "").trim();
         const renewalEntryId = String(formEl.elements.renewalEntryId?.value || "").trim();
@@ -3086,11 +3832,12 @@
           await updateStudentRenewalHistory(studentId, renewalEntryId, {
             renewalDate,
             addedSessions,
+            receivedAmount,
             note,
           });
           return;
         }
-        await addStudentRenewalHistory(studentId, { renewalDate, addedSessions, note });
+        await addStudentRenewalHistory(studentId, { renewalDate, addedSessions, receivedAmount, note });
       });
     });
 
@@ -3145,6 +3892,14 @@
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         toggleSessionDetail(btn.dataset.studentId, Number(btn.dataset.sessionNumber));
+      });
+    });
+
+    document.querySelectorAll(".payment-group-button").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        selectStudentPaymentGroup(btn.dataset.studentId, btn.dataset.groupId);
       });
     });
 
@@ -3222,6 +3977,7 @@
     if (!id) return;
     if (state.expandedRowIds.has(id)) {
       state.expandedRowIds.delete(id);
+      delete state.selectedPaymentGroupByStudent[id];
       delete state.expandedSessionPanelByStudent[id];
       delete state.editingRenewalEntryByStudent[id];
     } else {
@@ -3370,10 +4126,451 @@
     fillCounselingDetailModal(record);
   }
 
+  function formatKoreanDocumentDate(value) {
+    const trimmed = String(value || "").trim();
+    if (!trimmed) return "-";
+    const d = new Date(trimmed);
+    if (Number.isNaN(d.getTime())) return trimmed;
+    return `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일`;
+  }
+
+  function buildRefundDraftFromStudent(student, seedDraft, forceCalculatedFields) {
+    const seed = normalizeRefundDraft(seedDraft);
+    const groups = getStudentPaymentGroups(student);
+    const resolvedGroupId =
+      seed && groups.some((group) => group.id === seed.paymentGroupId)
+        ? seed.paymentGroupId
+        : groups[0]?.id || "";
+    const targetGroup = groups.find((group) => group.id === resolvedGroupId) || groups[0] || null;
+    const defaultRegularPrice = Math.max(0, Number(student.tuitionFee) || 0);
+    const defaultEventPrice =
+      targetGroup && sanitizeNonNegativeAmount(targetGroup.receivedAmount, 0) > 0
+        ? sanitizeNonNegativeAmount(targetGroup.receivedAmount, 0)
+        : defaultRegularPrice;
+    const defaultPerSessionPrice =
+      targetGroup && targetGroup.totalSessions > 0
+        ? Math.round(defaultEventPrice / targetGroup.totalSessions)
+        : 0;
+    const defaultRefundAmount = Math.max(
+      defaultEventPrice - defaultPerSessionPrice * (targetGroup ? targetGroup.completedCount : 0),
+      0
+    );
+    const defaultLessonDescription = targetGroup
+      ? `${student.curriculum || "수업"} (${formatNumber(targetGroup.totalSessions)}회차)`
+      : student.curriculum || "";
+    const useSeedForCalculatedFields = !!seed && !forceCalculatedFields;
+
+    return {
+      paymentGroupId: resolvedGroupId,
+      lessonDescription:
+        useSeedForCalculatedFields && seed.lessonDescription
+          ? seed.lessonDescription
+          : defaultLessonDescription,
+      regularPrice: useSeedForCalculatedFields ? seed.regularPrice : defaultRegularPrice,
+      eventPrice: useSeedForCalculatedFields ? seed.eventPrice : defaultEventPrice,
+      perSessionPrice: useSeedForCalculatedFields ? seed.perSessionPrice : defaultPerSessionPrice,
+      refundAmount: useSeedForCalculatedFields ? seed.refundAmount : defaultRefundAmount,
+      bankName: seed ? seed.bankName : "",
+      accountNumber: seed ? seed.accountNumber : "",
+      accountHolder: seed ? seed.accountHolder : "",
+      issueDate: seed && seed.issueDate ? seed.issueDate : todayISO(),
+      signerName: seed && seed.signerName ? seed.signerName : String(student.name || "").trim(),
+    };
+  }
+
+  function renderRefundLessonRows(student, paymentGroupId) {
+    const entries = buildRefundLessonEntries(student, paymentGroupId);
+    if (entries.length === 0) {
+      return `
+        <tr>
+          <th>수강 내역 없음</th>
+          <td>-</td>
+          <th></th>
+          <td></td>
+        </tr>
+      `;
+    }
+    const rows = [];
+    for (let i = 0; i < entries.length; i += 2) {
+      const left = entries[i] || null;
+      const right = entries[i + 1] || null;
+      rows.push(`
+        <tr>
+          <th>${escapeHtml(left ? left.label : "")}</th>
+          <td>${escapeHtml(left ? formatDate(left.sessionDate) : "")}</td>
+          <th>${escapeHtml(right ? right.label : "")}</th>
+          <td>${escapeHtml(right ? formatDate(right.sessionDate) : "")}</td>
+        </tr>
+      `);
+    }
+    return rows.join("");
+  }
+
+  function renderRefundSheetPreview(student, draft) {
+    const safeDraft = buildRefundDraftFromStudent(student, draft, false);
+    const paymentGroup = getStudentPaymentGroupById(student, safeDraft.paymentGroupId);
+    return `
+      <div class="refund-sheet-paper">
+        <div class="refund-sheet-accent top"></div>
+        <header class="refund-sheet-header">
+          <div>
+            <p class="refund-sheet-title">환불 내역서</p>
+            <p class="refund-sheet-subtitle">HAOTING CHINESE</p>
+          </div>
+        </header>
+
+        <section class="refund-sheet-block">
+          <h3 class="refund-sheet-section-title">대상</h3>
+          <table class="refund-sheet-table is-compact">
+            <tbody>
+              <tr>
+                <th>성함</th>
+                <td>${escapeHtml(student.name || "-")}</td>
+                <th>생년월일</th>
+                <td>${escapeHtml(formatDate(student.birthDate))}</td>
+              </tr>
+              <tr>
+                <th>결제일</th>
+                <td>${escapeHtml(paymentGroup ? formatDate(paymentGroup.paymentDate) : "-")}</td>
+                <th>수업 내용 (회차)</th>
+                <td>${escapeHtml(safeDraft.lessonDescription || "-")}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="refund-sheet-block">
+          <h3 class="refund-sheet-section-title">수강 내역</h3>
+          <table class="refund-sheet-table">
+            <tbody>
+              ${renderRefundLessonRows(student, safeDraft.paymentGroupId)}
+            </tbody>
+          </table>
+        </section>
+
+        <section class="refund-sheet-block">
+          <h3 class="refund-sheet-section-title">환불 내역</h3>
+          <table class="refund-sheet-table is-compact">
+            <tbody>
+              <tr>
+                <th>정가</th>
+                <td>${escapeHtml(formatNumber(safeDraft.regularPrice || 0))}</td>
+                <th>이벤트가(결제액)</th>
+                <td>${escapeHtml(formatNumber(safeDraft.eventPrice || 0))}</td>
+              </tr>
+              <tr>
+                <th>회당 가격</th>
+                <td>${escapeHtml(formatNumber(safeDraft.perSessionPrice || 0))}</td>
+                <th>환불액</th>
+                <td>${escapeHtml(formatNumber(safeDraft.refundAmount || 0))}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="refund-sheet-note">
+            <p>환불 금액 산정 기준은 이벤트가가 아닌 정가로 계산됩니다. (환불규정 참조)</p>
+            <p>환불 요청으로 인해 발생되는 모든 법적인 책임은 본인에게 있습니다.</p>
+          </div>
+        </section>
+
+        <section class="refund-sheet-block">
+          <h3 class="refund-sheet-section-title">환불 받을 계좌</h3>
+          <table class="refund-sheet-table is-account">
+            <tbody>
+              <tr>
+                <th>은행명</th>
+                <td>${escapeHtml(safeDraft.bankName || "-")}</td>
+              </tr>
+              <tr>
+                <th>계좌번호</th>
+                <td>${escapeHtml(safeDraft.accountNumber || "-")}</td>
+              </tr>
+              <tr>
+                <th>예금주</th>
+                <td>${escapeHtml(safeDraft.accountHolder || "-")}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <footer class="refund-sheet-footer">
+          <span>${escapeHtml(formatKoreanDocumentDate(safeDraft.issueDate))}</span>
+          <span>이름: ${escapeHtml(safeDraft.signerName || student.name || "-")}</span>
+          <span>(서명)</span>
+        </footer>
+        <div class="refund-sheet-accent bottom"></div>
+      </div>
+    `;
+  }
+
+  function syncRefundSheetForm() {
+    const form = document.getElementById("refund-sheet-form");
+    if (!form || !state.refundStudentId) return;
+    const student = state.students.find((item) => item.id === state.refundStudentId);
+    if (!student) return;
+    const draft = buildRefundDraftFromStudent(student, state.refundDraft, false);
+    state.refundDraft = draft;
+    const groups = getStudentPaymentGroups(student);
+    const paymentGroupSelect = form.elements.paymentGroupId;
+    if (paymentGroupSelect) {
+      paymentGroupSelect.innerHTML = groups
+        .map(
+          (group) => `
+            <option value="${escapeHtml(group.id)}">
+              ${escapeHtml(`결제 ${group.order} · ${formatDate(group.paymentDate) || "날짜 미입력"} · ${formatNumber(group.totalSessions)}회`)}
+            </option>
+          `
+        )
+        .join("");
+      paymentGroupSelect.value = draft.paymentGroupId || groups[0]?.id || "";
+    }
+    form.elements.lessonDescription.value = draft.lessonDescription || "";
+    form.elements.regularPrice.value = draft.regularPrice || 0;
+    form.elements.eventPrice.value = draft.eventPrice || 0;
+    form.elements.perSessionPrice.value = draft.perSessionPrice || 0;
+    form.elements.refundAmount.value = draft.refundAmount || 0;
+    form.elements.bankName.value = draft.bankName || "";
+    form.elements.accountNumber.value = draft.accountNumber || "";
+    form.elements.accountHolder.value = draft.accountHolder || "";
+    form.elements.issueDate.value = draft.issueDate || todayISO();
+    form.elements.signerName.value = draft.signerName || "";
+    const studentNameEl = document.getElementById("refund-sheet-student-name");
+    const studentMetaEl = document.getElementById("refund-sheet-student-meta");
+    if (studentNameEl) studentNameEl.textContent = `${student.name || "학생"} 환불 내역서`;
+    if (studentMetaEl) {
+      studentMetaEl.textContent = [student.curriculum || "커리큘럼 미입력", student.contact || "연락처 미입력"].join(" · ");
+    }
+    const previewEl = document.getElementById("refund-sheet-preview");
+    if (previewEl) previewEl.innerHTML = renderRefundSheetPreview(student, draft);
+  }
+
+  function openRefundSheetModal(studentId) {
+    const modal = document.getElementById("refund-sheet-modal");
+    if (!modal) return;
+    const student = state.students.find((item) => item.id === studentId);
+    if (!student) {
+      showToast("학생 정보를 찾을 수 없습니다.");
+      return;
+    }
+    state.refundStudentId = studentId;
+    state.refundDraft = buildRefundDraftFromStudent(student, student.refundDraft, false);
+    syncRefundSheetForm();
+    modal.removeAttribute("hidden");
+    modal.style.removeProperty("display");
+    modal.classList.remove("hidden");
+    modal.classList.add("modal-open");
+    document.body.style.overflow = "hidden";
+  }
+
+  function closeRefundSheetModal() {
+    const modal = document.getElementById("refund-sheet-modal");
+    if (!modal) return;
+    modal.classList.remove("modal-open");
+    modal.classList.add("hidden");
+    modal.setAttribute("hidden", "");
+    modal.style.setProperty("display", "none", "important");
+    document.body.style.overflow = "";
+    document.body.classList.remove("printing-refund-sheet");
+    state.refundStudentId = null;
+    state.refundDraft = null;
+  }
+
+  function syncRefundSheetModal() {
+    const modal = document.getElementById("refund-sheet-modal");
+    if (!modal || !modal.classList.contains("modal-open") || !state.refundStudentId) return;
+    const student = state.students.find((item) => item.id === state.refundStudentId);
+    if (!student) {
+      closeRefundSheetModal();
+      return;
+    }
+    syncRefundSheetForm();
+  }
+
+  function readRefundDraftFromForm(form) {
+    if (!form) return null;
+    return normalizeRefundDraft({
+      paymentGroupId: form.elements.paymentGroupId?.value,
+      lessonDescription: form.elements.lessonDescription?.value,
+      regularPrice: form.elements.regularPrice?.value,
+      eventPrice: form.elements.eventPrice?.value,
+      perSessionPrice: form.elements.perSessionPrice?.value,
+      refundAmount: form.elements.refundAmount?.value,
+      bankName: form.elements.bankName?.value,
+      accountNumber: form.elements.accountNumber?.value,
+      accountHolder: form.elements.accountHolder?.value,
+      issueDate: form.elements.issueDate?.value,
+      signerName: form.elements.signerName?.value,
+    });
+  }
+
+  function sanitizeFilenamePart(value, fallback) {
+    const cleaned = String(value || "")
+      .trim()
+      .replace(/[\\/:*?"<>|]/g, "-")
+      .replace(/\s+/g, "_");
+    return cleaned || fallback;
+  }
+
+  function cleanupRefundPdfArtifacts() {
+    document
+      .querySelectorAll(".html2pdf__overlay, .html2pdf__container, .html2canvas-container")
+      .forEach((node) => node.remove());
+  }
+
+  function ensureRefundPdfLibrary() {
+    if (typeof window.html2pdf === "function") {
+      return Promise.resolve(window.html2pdf);
+    }
+    if (refundPdfLibraryPromise) {
+      return refundPdfLibraryPromise;
+    }
+    refundPdfLibraryPromise = new Promise((resolve, reject) => {
+      const existing = document.querySelector('script[data-refund-pdf-lib="true"]');
+      if (existing) {
+        existing.addEventListener("load", () => resolve(window.html2pdf), { once: true });
+        existing.addEventListener("error", () => reject(new Error("PDF 라이브러리 로드 실패")), { once: true });
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js";
+      script.async = true;
+      script.dataset.refundPdfLib = "true";
+      script.addEventListener("load", () => {
+        if (typeof window.html2pdf === "function") {
+          resolve(window.html2pdf);
+        } else {
+          reject(new Error("html2pdf is unavailable"));
+        }
+      });
+      script.addEventListener("error", () => reject(new Error("PDF 라이브러리 로드 실패")));
+      document.head.appendChild(script);
+    }).catch((err) => {
+      refundPdfLibraryPromise = null;
+      throw err;
+    });
+    return refundPdfLibraryPromise;
+  }
+
+  async function handleRefundSheetSave() {
+    const form = document.getElementById("refund-sheet-form");
+    if (!form || !state.refundStudentId) return;
+    const student = state.students.find((item) => item.id === state.refundStudentId);
+    if (!student) {
+      showToast("학생 정보를 찾을 수 없습니다.");
+      return;
+    }
+    const draft = readRefundDraftFromForm(form);
+    if (!draft) return;
+    state.refundDraft = draft;
+    try {
+      await updateStudent(state.refundStudentId, {
+        refundDraft: draft,
+      });
+      student.refundDraft = normalizeRefundDraft(draft);
+      syncRefundSheetForm();
+      showToast("환불 내역서를 저장했습니다.");
+    } catch (err) {
+      console.error("[handleRefundSheetSave]", err);
+      showToast("환불 내역서 저장에 실패했습니다. 잠시 후 다시 시도해 주세요.");
+    }
+  }
+
+  function handleRefundSheetPrint() {
+    const form = document.getElementById("refund-sheet-form");
+    if (!form || !state.refundStudentId) return;
+    state.refundDraft = readRefundDraftFromForm(form);
+    syncRefundSheetForm();
+    document.body.classList.add("printing-refund-sheet");
+    window.print();
+  }
+
+  async function handleRefundSheetDownload() {
+    const form = document.getElementById("refund-sheet-form");
+    const downloadBtn = document.getElementById("refund-sheet-download-btn");
+    if (!form || !state.refundStudentId) return;
+    const student = state.students.find((item) => item.id === state.refundStudentId);
+    if (!student) {
+      showToast("학생 정보를 찾을 수 없습니다.");
+      return;
+    }
+
+    state.refundDraft = readRefundDraftFromForm(form);
+    syncRefundSheetForm();
+
+    const previewPaper = document.querySelector("#refund-sheet-preview .refund-sheet-paper");
+    if (!previewPaper) {
+      showToast("PDF로 저장할 환불 내역서를 찾을 수 없습니다.");
+      return;
+    }
+
+    if (downloadBtn) downloadBtn.disabled = true;
+    const filename = `환불내역서_${sanitizeFilenamePart(student.name, "학생")}_${sanitizeFilenamePart(
+      state.refundDraft?.issueDate || todayISO(),
+      todayISO()
+    )}.pdf`;
+
+    cleanupRefundPdfArtifacts();
+    const sandbox = document.createElement("div");
+    sandbox.style.position = "fixed";
+    sandbox.style.left = "-100000px";
+    sandbox.style.top = "0";
+    sandbox.style.width = "210mm";
+    sandbox.style.height = "0";
+    sandbox.style.padding = "0";
+    sandbox.style.margin = "0";
+    sandbox.style.background = "#ffffff";
+    sandbox.style.zIndex = "-1";
+    sandbox.style.opacity = "0";
+    sandbox.style.visibility = "hidden";
+    sandbox.style.pointerEvents = "none";
+    sandbox.style.overflow = "hidden";
+
+    const exportNode = previewPaper.cloneNode(true);
+    exportNode.style.width = "190mm";
+    exportNode.style.margin = "0 auto";
+    exportNode.style.border = "none";
+    exportNode.style.borderRadius = "0";
+    exportNode.style.boxShadow = "none";
+
+    sandbox.appendChild(exportNode);
+    document.body.appendChild(sandbox);
+
+    try {
+      const html2pdf = await ensureRefundPdfLibrary();
+      await html2pdf()
+        .set({
+          filename,
+          margin: [5, 5, 5, 5],
+          image: { type: "jpeg", quality: 0.98 },
+          html2canvas: {
+            scale: 2,
+            useCORS: true,
+            backgroundColor: "#ffffff",
+          },
+          jsPDF: {
+            unit: "mm",
+            format: "a4",
+            orientation: "portrait",
+          },
+          pagebreak: { mode: ["css", "legacy"] },
+        })
+        .from(exportNode)
+        .save();
+      showToast("환불 내역서를 PDF로 다운로드했습니다.");
+    } catch (err) {
+      console.error("[handleRefundSheetDownload]", err);
+      showToast("PDF 다운로드에 실패했습니다. 잠시 후 다시 시도해 주세요.");
+    } finally {
+      cleanupRefundPdfArtifacts();
+      sandbox.remove();
+      if (downloadBtn) downloadBtn.disabled = false;
+    }
+  }
+
   function resetForm(form) {
     form.reset();
     form.elements.id.value = "";
     form.elements.birthDate.value = "";
+    form.elements.receivedAmountTotal.value = "";
     form.elements.registrationDate.value = todayISO();
     form.elements.lastClassDate.value = todayISO();
     form.elements.isActive.checked = true;
@@ -3384,6 +4581,10 @@
     // form.reset() 후에는 disabled placeholder 가 다시 selected 가 되어 value 가 "" 으로 돌아갑니다.
     form.elements.assignedInstructor.value = "";
     form.elements.curriculum.value = "";
+    renderStudentTabSelectionInForm(
+      form,
+      state.selectedStudentTabId && state.selectedStudentTabId !== "all" ? [state.selectedStudentTabId] : []
+    );
   }
 
   function fillFormFromStudent(form, s) {
@@ -3401,6 +4602,7 @@
     form.elements.registeredSessions.value = s.registeredSessions ?? "";
     form.elements.durationMinutes.value = s.durationMinutes ?? "";
     form.elements.tuitionFee.value = s.tuitionFee ?? "";
+    form.elements.receivedAmountTotal.value = s.receivedAmountTotal ?? "";
     form.elements.registrationDate.value = s.registrationDate || "";
     form.elements.lastClassDate.value = s.lastClassDate || "";
     form.elements.progress.value = s.progress || "";
@@ -3410,6 +4612,7 @@
     form.elements.notes.value = s.notes || "";
     setScheduleDaysOnForm(form, Array.isArray(s.scheduleDays) ? s.scheduleDays : []);
     refreshScheduleDayTimeRows(form, normalizeScheduleDayTimesMap(s.scheduleDayTimes));
+    renderStudentTabSelectionInForm(form, s.studentTabIds);
   }
 
   /** 학생 폼의 필수(*) 항목: 이름, 담당 강사, 연락처 */
@@ -3439,6 +4642,8 @@
       const n = Number(raw);
       return Number.isFinite(n) ? n : 0;
     };
+    const tuitionFee = toNumber("tuitionFee");
+    const receivedAmountTotalRaw = fd.get("receivedAmountTotal");
     const checkedDays = fd.getAll("scheduleDays").map(String);
     const orderedDays = checkedDays.includes(SCHEDULE_FLEXIBLE_DAY)
       ? [SCHEDULE_FLEXIBLE_DAY]
@@ -3447,13 +4652,18 @@
       name: String(fd.get("name") || "").trim(),
       birthDate: String(fd.get("birthDate") || "").trim(),
       assignedInstructor: String(fd.get("assignedInstructor") || "").trim(),
+      studentTabIds: normalizeStringArray(fd.getAll("studentTabIds").map(String)),
       registeredSessions: toNumber("registeredSessions"),
       registrationDate: String(fd.get("registrationDate") || "").trim(),
       lastClassDate: String(fd.get("lastClassDate") || "").trim(),
       notes: String(fd.get("notes") || "").trim(),
       location: String(fd.get("location") || "").trim(),
       durationMinutes: toNumber("durationMinutes"),
-      tuitionFee: toNumber("tuitionFee"),
+      tuitionFee,
+      receivedAmountTotal:
+        receivedAmountTotalRaw === null || receivedAmountTotalRaw === ""
+          ? tuitionFee
+          : sanitizeNonNegativeAmount(receivedAmountTotalRaw, tuitionFee),
       contact: String(fd.get("contact") || "").trim(),
       inflowChannel: String(fd.get("inflowChannel") || "").trim(),
       region: String(fd.get("region") || "").trim(),
@@ -3476,6 +4686,7 @@
         return normalizeScheduleDayTimesMap(map);
       })(),
       renewalHistory: [],
+      refundDraft: null,
     };
   }
 
@@ -3693,6 +4904,9 @@
     draft.renewalHistory = existingStudent
       ? normalizeRenewalHistory(existingStudent.renewalHistory)
       : [];
+    draft.refundDraft = existingStudent
+      ? normalizeRefundDraft(existingStudent.refundDraft)
+      : null;
 
     if (!validateStudentFormRequired(form, draft)) {
       return;
@@ -3845,6 +5059,7 @@
       state.currentUser = fbUser ? mapFirebaseUser(fbUser) : null;
       if (state.currentUser) {
         state.isStudentsLoading = true;
+        state.isStudentTabsLoading = true;
         state.isCounselingLoading = true;
         applyUserToShell();
         showApp();
@@ -3853,8 +5068,10 @@
       } else {
         clearDataSubscriptions();
         state.students = [];
+        state.studentTabs = [];
         state.counselingRecords = [];
         state.isStudentsLoading = false;
+        state.isStudentTabsLoading = false;
         state.isCounselingLoading = false;
         showLogin();
       }
@@ -3982,12 +5199,21 @@
 
     // 학생 관리 화면 상태도 깔끔하게 초기화
     state.route = "students";
+    state.studentTabs = [];
+    state.isStudentTabsLoading = true;
+    state.selectedStudentTabId = "all";
     state.filter = "all";
     state.keyword = "";
+    state.courseTrackFilter = "all";
+    state.studentSort = "default";
     state.salesFilter = "all";
     state.counselingStatusFilter = "all";
     state.counselingDraft = emptyCounselingDraft();
+    state.selectedPaymentGroupByStudent = {};
+    state.refundStudentId = null;
+    state.refundDraft = null;
 
+    closeRefundSheetModal();
     closeMobileMenu();
     showLogin();
     showToast("로그아웃되었습니다.");
@@ -4060,6 +5286,18 @@
     document.querySelectorAll("#student-detail-modal .student-detail-close").forEach((btn) => {
       btn.addEventListener("click", closeStudentDetailModal);
     });
+    document
+      .getElementById("student-detail-refund-btn")
+      ?.addEventListener("click", () => {
+        const btn = document.getElementById("student-detail-refund-btn");
+        const studentId = btn?.dataset.studentId;
+        if (!studentId) {
+          showToast("학생 정보를 찾을 수 없습니다.");
+          return;
+        }
+        closeStudentDetailModal();
+        openRefundSheetModal(studentId);
+      });
 
     document.querySelectorAll("#counseling-detail-modal .counseling-detail-close").forEach((btn) => {
       btn.addEventListener("click", closeCounselingDetailModal);
@@ -4090,10 +5328,61 @@
       });
     }
 
+    document.querySelectorAll("#refund-sheet-modal .refund-sheet-close").forEach((btn) => {
+      btn.addEventListener("click", closeRefundSheetModal);
+    });
+    document
+      .getElementById("refund-sheet-download-btn")
+      ?.addEventListener("click", handleRefundSheetDownload);
+    document
+      .getElementById("refund-sheet-save-btn")
+      ?.addEventListener("click", handleRefundSheetSave);
+    document
+      .getElementById("refund-sheet-print-btn")
+      ?.addEventListener("click", handleRefundSheetPrint);
+    const refundSheetModal = document.getElementById("refund-sheet-modal");
+    if (refundSheetModal) {
+      refundSheetModal.addEventListener("click", (e) => {
+        if (e.target === refundSheetModal) closeRefundSheetModal();
+      });
+    }
+    const refundSheetForm = document.getElementById("refund-sheet-form");
+    if (refundSheetForm) {
+      refundSheetForm.addEventListener("input", () => {
+        if (!state.refundStudentId) return;
+        const student = state.students.find((item) => item.id === state.refundStudentId);
+        if (!student) return;
+        state.refundDraft = readRefundDraftFromForm(refundSheetForm);
+        const previewEl = document.getElementById("refund-sheet-preview");
+        if (previewEl) previewEl.innerHTML = renderRefundSheetPreview(student, state.refundDraft);
+      });
+      refundSheetForm.addEventListener("change", (e) => {
+        if (!state.refundStudentId) return;
+        const student = state.students.find((item) => item.id === state.refundStudentId);
+        if (!student) return;
+        const target = e.target;
+        state.refundDraft = readRefundDraftFromForm(refundSheetForm);
+        if (target && target.name === "paymentGroupId") {
+          state.refundDraft = buildRefundDraftFromStudent(student, state.refundDraft, true);
+          syncRefundSheetForm();
+          return;
+        }
+        const previewEl = document.getElementById("refund-sheet-preview");
+        if (previewEl) previewEl.innerHTML = renderRefundSheetPreview(student, state.refundDraft);
+      });
+    }
+    window.addEventListener("afterprint", () => {
+      document.body.classList.remove("printing-refund-sheet");
+    });
+
     // ESC 키로 모달 닫기
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
-      // 우선순위: 상담 상세 모달 → 학생 상세 모달 → 학생 수정 모달 → 모바일 사이드바
+      // 우선순위: 환불서 모달 → 상담 상세 모달 → 학생 상세 모달 → 학생 수정 모달 → 모바일 사이드바
+      if (document.getElementById("refund-sheet-modal")?.classList.contains("modal-open")) {
+        closeRefundSheetModal();
+        return;
+      }
       if (document.getElementById("counseling-detail-modal")?.classList.contains("modal-open")) {
         closeCounselingDetailModal();
         return;
@@ -4236,6 +5525,7 @@
     if (!isDBReady()) {
       // 설정값이 아직 비어 있는 등 Firestore 를 사용할 수 없는 상태
       state.isStudentsLoading = false;
+      state.isStudentTabsLoading = false;
       state.isCounselingLoading = false;
       render();
       showFirebaseConfigBanner();
@@ -4245,6 +5535,7 @@
     // onSnapshot 을 먼저 걸어 첫 스냅샷으로 UI를 바로 풀고, 시드는 병렬로 진행합니다.
     hideFirebaseConfigBanner();
     subscribeToStudents();
+    subscribeToStudentTabs();
     subscribeToCounselingRecords();
     seedFirestoreOnce().catch((err) => {
       console.error("[seedFirestoreOnce]", err);
