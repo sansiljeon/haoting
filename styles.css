@@ -104,6 +104,15 @@ textarea.form-input {
   background-color: #f8fafc; /* slate-50 */
 }
 
+.counseling-row {
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+
+.counseling-row:hover {
+  background-color: #f8fafc;
+}
+
 /* ---- 토스트 페이드 ---- */
 #toast.show {
   display: inline-block;

@@ -82,11 +82,12 @@
       id: null,
       studentId: "",
       date: "",
-      assignedInstructor: "",
+      counselorName: "",
       recordName: "",
       recordContact: "",
       recordRegion: "",
       classFormat: "",
+      didRegister: false,
       chBanner: false,
       chInternet: false,
       chReferral: false,
@@ -115,8 +116,8 @@
     isStudentsLoading: true, // Firestore 첫 스냅샷 도착 전까지 true
     counselingRecords: [],
     isCounselingLoading: true,
-    /** 목록 필터: 빈 문자열이면 전체 학생 */
-    counselingListFilterStudentId: "",
+    /** 상담기록 목록 필터 */
+    counselingStatusFilter: "all", // "all" | "registered" | "unregistered"
     /** 상단 작성/수정 폼 (수강생 상담 기록지 필드) */
     counselingDraft: emptyCounselingDraft(),
     filter: "all", // "all" | "active"
@@ -128,6 +129,8 @@
     expandedRowIds: new Set(), // 회차 관리가 펼쳐진 학생 행 id 들
     expandedSessionPanelByStudent: {}, // 학생별 현재 펼쳐진 회차 번호
     detailStudentId: null, // 읽기 전용 상세 모달에 표시 중인 학생 id
+    detailCounselingId: null, // 읽기 전용 상담 상세 모달에 표시 중인 상담 기록 id
+    pendingCounselingLinkId: null, // 상담 상세에서 학생 등록으로 넘어온 경우 연결할 상담 기록 id
   };
 
   // Firestore 구독 해제 함수. 여러 번 구독되지 않도록 한 곳에서 보관합니다.
@@ -152,6 +155,7 @@
       registeredSessions: 20,
       registrationDate: "2026-02-10",
       lastClassDate: "2026-05-06",
+      birthDate: "2012-03-15",
       notes: "비즈니스 회화 중심 수업 희망. 주 2회 화/목 19:00.",
       location: "강남 본원 302호",
       durationMinutes: 60,
@@ -166,6 +170,14 @@
       homework: "Lesson 8 단어 50개 암기, 본문 낭독 녹음 제출",
       scheduleDays: ["화", "목"],
       scheduleDayTimes: { "화": "19:00", "목": "19:00" },
+      renewalHistory: [
+        {
+          id: "renewal-001",
+          renewalDate: "2026-04-28",
+          addedSessions: 10,
+          note: "주 2회 유지로 재등록",
+        },
+      ],
     },
     {
       id: "stu-0002",
@@ -174,6 +186,7 @@
       registeredSessions: 12,
       registrationDate: "2026-03-22",
       lastClassDate: "2026-05-08",
+      birthDate: "2010-09-02",
       notes: "HSK 4급 단기 합격 목표. 어휘 보강 필요.",
       location: "온라인 (Zoom)",
       durationMinutes: 50,
@@ -196,6 +209,7 @@
       registeredSessions: 10,
       registrationDate: "2025-11-05",
       lastClassDate: "2026-02-14",
+      birthDate: "2014-11-30",
       notes: "학업 일정으로 휴원. 9월 복귀 예정.",
       location: "강남 본원 201호",
       durationMinutes: 45,
@@ -230,6 +244,24 @@
     return out;
   }
 
+  function normalizeRenewalHistory(entries) {
+    if (!Array.isArray(entries)) return [];
+    return entries
+      .map((item, idx) => {
+        if (!item || typeof item !== "object") return null;
+        const addedSessions = Number(item.addedSessions);
+        if (!Number.isFinite(addedSessions) || addedSessions <= 0) return null;
+        return {
+          id: String(item.id || `renewal-${idx + 1}`),
+          renewalDate: String(item.renewalDate || "").trim(),
+          addedSessions: Math.round(addedSessions),
+          note: String(item.note || "").trim(),
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => String(b.renewalDate || "").localeCompare(String(a.renewalDate || "")));
+  }
+
   // 신규/이전 버전 호환을 위해 누락된 필드를 안전한 기본값으로 채워 줍니다.
   function normalizeSessionRecords(records) {
     if (!Array.isArray(records)) return [];
@@ -258,9 +290,11 @@
   function normalizeStudent(s) {
     if (!s || typeof s !== "object") return s;
     return Object.assign({}, s, {
+      birthDate: String(s.birthDate || "").trim(),
       scheduleDays: Array.isArray(s.scheduleDays) ? s.scheduleDays : [],
       scheduleDayTimes: normalizeScheduleDayTimesMap(s.scheduleDayTimes),
       sessionRecords: normalizeSessionRecords(s.sessionRecords),
+      renewalHistory: normalizeRenewalHistory(s.renewalHistory),
     });
   }
 
@@ -278,6 +312,34 @@
 
   function getStudentSessionCount(student) {
     return normalizeSessionRecords(student && student.sessionRecords).filter((item) => item.isCompleted).length;
+  }
+
+  function getStudentRenewalCount(student) {
+    return normalizeRenewalHistory(student && student.renewalHistory).length;
+  }
+
+  function formatRenewalHistoryForDisplay(entries) {
+    const list = normalizeRenewalHistory(entries);
+    if (list.length === 0) return "-";
+    return list
+      .map((item) => {
+        const dateText = item.renewalDate ? formatDate(item.renewalDate) : "날짜 미입력";
+        const noteText = item.note ? ` · ${item.note}` : "";
+        return `${dateText} / ${formatNumber(item.addedSessions)}회 추가${noteText}`;
+      })
+      .join("\n");
+  }
+
+  function normalizeContactDigits(raw) {
+    return String(raw || "").replace(/\D/g, "");
+  }
+
+  function findStudentByContact(contact) {
+    const digits = normalizeContactDigits(contact);
+    if (!digits) return null;
+    return (
+      state.students.find((student) => normalizeContactDigits(student.contact) === digits) || null
+    );
   }
 
   function getLatestCompletedSessionDate(records) {
@@ -419,6 +481,45 @@
     }
   }
 
+  async function addStudentRenewalHistory(studentId, entry) {
+    const student = state.students.find((item) => item.id === studentId);
+    if (!student) {
+      showToast("학생 정보를 찾을 수 없습니다.");
+      return;
+    }
+
+    const addedSessions = Math.max(0, Math.round(Number(entry && entry.addedSessions) || 0));
+    if (addedSessions <= 0) {
+      showToast("추가할 회차를 1회 이상 입력해 주세요.");
+      return;
+    }
+
+    const renewalEntry = {
+      id: generateId(),
+      renewalDate: String((entry && entry.renewalDate) || "").trim() || todayISO(),
+      addedSessions,
+      note: String((entry && entry.note) || "").trim(),
+    };
+    const nextHistory = normalizeRenewalHistory([renewalEntry, ...(student.renewalHistory || [])]);
+    const nextRegisteredSessions = Math.max(0, Number(student.registeredSessions) || 0) + addedSessions;
+
+    student.renewalHistory = nextHistory;
+    student.registeredSessions = nextRegisteredSessions;
+    render();
+
+    try {
+      await updateStudent(studentId, {
+        renewalHistory: nextHistory,
+        registeredSessions: nextRegisteredSessions,
+      });
+      showToast(`재등록 ${formatNumber(addedSessions)}회를 추가했습니다.`);
+    } catch (err) {
+      console.error("[addStudentRenewalHistory]", err);
+      showToast("재등록 기록 저장에 실패했습니다. 잠시 후 다시 시도해 주세요.");
+      render();
+    }
+  }
+
   function toggleSessionDetail(studentId, sessionNumber) {
     if (!studentId || !sessionNumber) return;
     const current = state.expandedSessionPanelByStudent[studentId];
@@ -437,11 +538,12 @@
     return Object.assign({}, r, {
       studentId: String(r.studentId || "").trim(),
       counselingDate: String(r.counselingDate || "").trim(),
-      assignedInstructor: String(r.assignedInstructor || "").trim(),
+      counselorName: String(r.counselorName || r.assignedInstructor || "").trim(),
       recordName: String(r.recordName || "").trim(),
-      recordContact: String(r.recordContact || "").trim(),
+      recordContact: normalizeKoreanMobileContact(String(r.recordContact || "").trim()),
       recordRegion: String(r.recordRegion || "").trim(),
       classFormat: String(r.classFormat || "").trim(),
+      didRegister: !!r.didRegister,
       chBanner: !!r.chBanner,
       chInternet: !!r.chInternet,
       chReferral: !!r.chReferral,
@@ -473,11 +575,12 @@
       id: n.id,
       studentId: n.studentId,
       date: n.counselingDate || todayISO(),
-      assignedInstructor: n.assignedInstructor,
+      counselorName: n.counselorName,
       recordName: n.recordName,
       recordContact: n.recordContact,
       recordRegion: n.recordRegion,
       classFormat: n.classFormat,
+      didRegister: n.didRegister,
       chBanner: n.chBanner,
       chInternet: n.chInternet,
       chReferral: n.chReferral,
@@ -515,13 +618,253 @@
     return text.length > 140 ? `${text.slice(0, 140)}…` : text;
   }
 
-  function applyStudentDataToCounselingDraft(studentId) {
-    const st = state.students.find((s) => s.id === studentId);
-    if (!st) return;
-    state.counselingDraft.recordName = String(st.name || "").trim();
-    state.counselingDraft.recordContact = String(st.contact || "").trim();
-    state.counselingDraft.recordRegion = String(st.region || "").trim();
-    state.counselingDraft.assignedInstructor = String(st.assignedInstructor || "").trim();
+  function isCounselingRegistered(record) {
+    const n = normalizeCounselingRecord(record);
+    return !!n.didRegister || !!findStudentByContact(n.recordContact);
+  }
+
+  function getLatestCounselingForStudent(student) {
+    if (!student) return null;
+    const digits = normalizeContactDigits(student.contact);
+    if (!digits) return null;
+    return (
+      state.counselingRecords
+        .map(normalizeCounselingRecord)
+        .filter((record) => normalizeContactDigits(record.recordContact) === digits)
+        .sort((a, b) => String(b.counselingDate || "").localeCompare(String(a.counselingDate || "")))[0] || null
+    );
+  }
+
+  function getCounselingStats(records) {
+    const total = Array.isArray(records) ? records.length : 0;
+    const registered = (records || []).filter((record) => isCounselingRegistered(record)).length;
+    const pending = Math.max(total - registered, 0);
+    const rate = total > 0 ? (registered / total) * 100 : 0;
+    return { total, registered, pending, rate };
+  }
+
+  function formatCounselingRequestChannels(record) {
+    const n = normalizeCounselingRecord(record);
+    const items = [];
+    if (n.chBanner) items.push("현수막 / 전단지");
+    if (n.chInternet) items.push("인터넷 서칭");
+    if (n.chReferral) {
+      items.push(n.chReferralName ? `지인 소개 (${n.chReferralName})` : "지인 소개");
+    }
+    if (n.chOther) {
+      items.push(n.chOtherDetail ? `기타 (${n.chOtherDetail})` : "기타");
+    }
+    return items.length > 0 ? items.join(" · ") : "-";
+  }
+
+  function formatCounselingInterestAreas(record) {
+    const n = normalizeCounselingRecord(record);
+    const items = [];
+    if (n.intConversation) items.push("회화");
+    if (n.intCertification) items.push("자격증");
+    if (n.intEmployment) items.push("취업");
+    if (n.intTravel) items.push("여행");
+    if (n.intRemind) items.push("리마인드");
+    if (n.intMaintain) items.push("감각유지");
+    if (n.intOther) items.push(n.intOtherDetail ? `기타 (${n.intOtherDetail})` : "기타");
+    return items.length > 0 ? items.join(" · ") : "-";
+  }
+
+  function renderCounselorSelectOptions(value) {
+    const current = String(value || "").trim();
+    const options = ['<option value="" disabled>상담자를 선택하세요</option>'];
+    INSTRUCTORS.forEach((name) => {
+      options.push(
+        `<option value="${escapeHtml(name)}"${current === name ? " selected" : ""}>${escapeHtml(name)}</option>`
+      );
+    });
+    if (current && !INSTRUCTORS.includes(current)) {
+      options.push(
+        `<option value="${escapeHtml(current)}" selected>${escapeHtml(current)} (기존)</option>`
+      );
+    }
+    if (!current) {
+      options[0] = '<option value="" disabled selected>상담자를 선택하세요</option>';
+    }
+    return options.join("");
+  }
+
+  function getCounselingDetailSections(record) {
+    const n = normalizeCounselingRecord(record);
+    const linkedStudent = findStudentByContact(n.recordContact);
+    return [
+      {
+        title: "상담 수강생 정보",
+        items: [
+          { label: "이름", value: n.recordName },
+          { label: "연락처", value: n.recordContact },
+          { label: "지역", value: n.recordRegion },
+          { label: "희망 수업 방식", value: n.classFormat || "-" },
+        ],
+      },
+      {
+        title: "상담 경로 / 등록",
+        items: [
+          { label: "상담 요청 경로", value: formatCounselingRequestChannels(n), fullWidth: true, multiline: true },
+          { label: "등록 여부", value: isCounselingRegistered(n) ? "등록 완료" : "미등록" },
+          { label: "상담자", value: n.counselorName || "-" },
+          { label: "연계 학생", value: linkedStudent ? linkedStudent.name : "-" },
+          { label: "학생 상태", value: linkedStudent ? getStudentStatusLabel(linkedStudent) : "-" },
+        ],
+      },
+      {
+        title: "상담 개요",
+        items: [
+          { label: "학습 경험", value: n.learningExperience, fullWidth: true, multiline: true },
+          { label: "수강 목적", value: n.enrollmentPurpose, fullWidth: true, multiline: true },
+          { label: "관심 분야", value: formatCounselingInterestAreas(n), fullWidth: true, multiline: true },
+          { label: "수강 목표", value: n.goalWithPeriod, fullWidth: true, multiline: true },
+          { label: "가능 수업 시간대", value: n.availableTimes, fullWidth: true, multiline: true },
+        ],
+      },
+      {
+        title: "기타 특이사항",
+        items: [{ label: "메모", value: n.specialNotes, fullWidth: true, multiline: true }],
+      },
+    ];
+  }
+
+  function renderCounselingDetailModalContent(record) {
+    const n = normalizeCounselingRecord(record);
+    const linkedStudent = findStudentByContact(n.recordContact);
+    const sections = getCounselingDetailSections(n);
+    return `
+      <div class="student-detail-summary">
+        <div class="min-w-0">
+          <p class="student-detail-name">${escapeHtml(n.recordName || "상담자 미입력")}</p>
+          <p class="student-detail-meta">${escapeHtml(
+            [formatDate(n.counselingDate), n.recordContact || "연락처 미입력"].join(" · ")
+          )}</p>
+        </div>
+        <div class="student-detail-chip-row">
+          <span class="student-detail-chip ${isCounselingRegistered(n) ? "is-active" : "is-inactive"}">
+            ${escapeHtml(isCounselingRegistered(n) ? "등록 완료" : "미등록")}
+          </span>
+          <span class="student-detail-chip">${escapeHtml(`상담자 ${n.counselorName || "-"}`)}</span>
+          ${
+            linkedStudent
+              ? `<span class="student-detail-chip">${escapeHtml(`연계 학생 ${linkedStudent.name}`)}</span>`
+              : ""
+          }
+        </div>
+      </div>
+      <div class="student-detail-sections">
+        ${sections
+          .map(
+            (section) => `
+          <section class="student-detail-section">
+            <h3 class="student-detail-section-title">${escapeHtml(section.title)}</h3>
+            <dl class="student-detail-grid">
+              ${section.items
+                .map((item) => {
+                  const value = item.value ? String(item.value) : "-";
+                  const valueClass = [
+                    "student-detail-value",
+                    item.multiline ? "is-multiline" : "",
+                    value === "-" ? "is-empty" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ");
+                  return `
+                    <div class="student-detail-field ${item.fullWidth ? "is-full" : ""}">
+                      <dt class="student-detail-label">${escapeHtml(item.label)}</dt>
+                      <dd class="${valueClass}">${escapeHtml(value)}</dd>
+                    </div>
+                  `;
+                })
+                .join("")}
+            </dl>
+          </section>
+        `
+          )
+          .join("")}
+      </div>
+    `;
+  }
+
+  function fillCounselingDetailModal(record) {
+    const titleEl = document.getElementById("counseling-detail-modal-title");
+    const subtitleEl = document.getElementById("counseling-detail-modal-subtitle");
+    const bodyEl = document.getElementById("counseling-detail-modal-body");
+    const primaryBtn = document.getElementById("counseling-detail-primary-btn");
+    const primaryLabel = document.getElementById("counseling-detail-primary-label");
+    if (!titleEl || !subtitleEl || !bodyEl) return;
+
+    const n = normalizeCounselingRecord(record);
+    const linkedStudent = findStudentByContact(n.recordContact);
+    titleEl.textContent = `${n.recordName || "상담 기록"} 상세`;
+    subtitleEl.textContent = "상담 기록지에 입력된 내용을 읽기 전용으로 확인합니다.";
+    bodyEl.innerHTML = renderCounselingDetailModalContent(n);
+    bodyEl.scrollTop = 0;
+    if (primaryBtn && primaryLabel) {
+      primaryLabel.textContent = linkedStudent ? "연계 학생 상세 보기" : "이 기록으로 학생 등록";
+      primaryBtn.title = linkedStudent
+        ? `${linkedStudent.name} 학생 상세 열기`
+        : "상담 기록을 바탕으로 학생 추가";
+    }
+  }
+
+  function buildStudentNotesFromCounseling(record) {
+    const n = normalizeCounselingRecord(record);
+    const lines = [
+      "[상담 기록 연계]",
+      n.counselingDate ? `상담일: ${formatDate(n.counselingDate)}` : "",
+      n.counselorName ? `상담자: ${n.counselorName}` : "",
+      n.enrollmentPurpose ? `수강 목적: ${n.enrollmentPurpose}` : "",
+      n.goalWithPeriod ? `수강 목표: ${n.goalWithPeriod}` : "",
+      n.specialNotes ? `기타 특이사항: ${n.specialNotes}` : "",
+    ].filter(Boolean);
+    return lines.join("\n");
+  }
+
+  function openStudentModalFromCounseling(recordId) {
+    const record = state.counselingRecords.find((item) => item.id === recordId);
+    if (!record) {
+      showToast("상담 기록을 찾을 수 없습니다.");
+      return;
+    }
+
+    const n = normalizeCounselingRecord(record);
+    const linkedStudent = findStudentByContact(n.recordContact);
+    if (linkedStudent) {
+      closeCounselingDetailModal();
+      openStudentDetailModal(linkedStudent.id);
+      return;
+    }
+
+    state.pendingCounselingLinkId = recordId;
+    closeCounselingDetailModal();
+    openStudentModal(null);
+
+    const form = document.getElementById("student-form");
+    const subtitleEl = document.getElementById("student-modal-subtitle");
+    if (!form) return;
+
+    form.elements.name.value = n.recordName || "";
+    form.elements.contact.value = normalizeKoreanMobileContact(n.recordContact || "");
+    form.elements.region.value = n.recordRegion || "";
+    form.elements.inflowChannel.value = formatCounselingRequestChannels(n) === "-" ? "" : formatCounselingRequestChannels(n);
+    form.elements.notes.value = buildStudentNotesFromCounseling(n);
+    if (INSTRUCTORS.includes(n.counselorName)) {
+      ensureInstructorOption(form, n.counselorName);
+      form.elements.assignedInstructor.value = n.counselorName;
+    }
+    if (subtitleEl) {
+      subtitleEl.textContent = `${n.recordName || "상담 기록"} 상담 내용을 바탕으로 학생 정보를 미리 채웠습니다. 확인 후 저장해 주세요.`;
+    }
+  }
+
+  function handleCounselingDetailPrimaryAction() {
+    if (!state.detailCounselingId) {
+      showToast("상담 기록을 찾을 수 없습니다.");
+      return;
+    }
+    openStudentModalFromCounseling(state.detailCounselingId);
   }
 
   function getStudentNameById(studentId) {
@@ -846,6 +1189,7 @@
     }
 
     syncStudentDetailModal();
+    syncCounselingDetailModal();
   }
 
   function bindSalesViewEvents() {
@@ -864,53 +1208,51 @@
   function renderCounselingView() {
     const d = state.counselingDraft;
     const draftDate = d.date || todayISO();
-    const draftStudentId = d.studentId || "";
     const isEditing = !!d.id;
 
-    const studentsSorted = sortedStudentsByName();
-    const studentOptionsHtml = [
-      `<option value="" disabled ${!draftStudentId ? "selected" : ""}>학생을 선택하세요</option>`,
-      ...studentsSorted.map((s) => {
-        const sel = s.id === draftStudentId ? " selected" : "";
-        return `<option value="${escapeHtml(s.id)}"${sel}>${escapeHtml(s.name || s.id)}</option>`;
-      }),
-    ].join("");
-
-    const filterVal = state.counselingListFilterStudentId || "";
-    const filterOptionsHtml = [
-      `<option value="">전체 학생</option>`,
-      ...studentsSorted.map((s) => {
-        const sel = s.id === filterVal ? " selected" : "";
-        return `<option value="${escapeHtml(s.id)}"${sel}>${escapeHtml(s.name || s.id)}</option>`;
-      }),
-    ].join("");
-
     let listRecords = state.counselingRecords.slice();
-    if (filterVal) {
-      listRecords = listRecords.filter((r) => r.studentId === filterVal);
+    if (state.counselingStatusFilter === "registered") {
+      listRecords = listRecords.filter((record) => isCounselingRegistered(record));
+    } else if (state.counselingStatusFilter === "unregistered") {
+      listRecords = listRecords.filter((record) => !isCounselingRegistered(record));
     }
 
     const fmt = (v) => (d.classFormat === v ? " checked" : "");
     const ichk = (flag) => (d[flag] ? " checked" : "");
+    const stats = getCounselingStats(state.counselingRecords);
+    const statusOptionsHtml = [
+      { value: "all", label: "전체 상담" },
+      { value: "registered", label: "등록 완료만" },
+      { value: "unregistered", label: "미등록만" },
+    ]
+      .map(
+        (item) =>
+          `<option value="${item.value}"${
+            state.counselingStatusFilter === item.value ? " selected" : ""
+          }>${item.label}</option>`
+      )
+      .join("");
 
     const rowsHtml =
       state.isCounselingLoading
-        ? `<tr><td colspan="4" class="px-4 py-12 text-center text-sm text-slate-500">
+        ? `<tr><td colspan="5" class="px-4 py-12 text-center text-sm text-slate-500">
             <i class="fa-solid fa-rotate fa-spin mr-2"></i>불러오는 중…
           </td></tr>`
         : listRecords.length === 0
-          ? `<tr><td colspan="4" class="px-4 py-12 text-center text-sm text-slate-500">
+          ? `<tr><td colspan="5" class="px-4 py-12 text-center text-sm text-slate-500">
               등록된 상담 기록이 없습니다. 아래에서 새로 추가해 보세요.
             </td></tr>`
           : listRecords
               .map((r) => {
                 const n = normalizeCounselingRecord(r);
-                const name = n.recordName || getStudentNameById(r.studentId);
+                const linkedStudent = findStudentByContact(n.recordContact);
+                const name = n.recordName || (linkedStudent && linkedStudent.name) || getStudentNameById(r.studentId);
                 const nameCell = name
                   ? escapeHtml(name)
                   : `<span class="text-amber-600">${escapeHtml(r.studentId || "-")}</span>
                      <span class="ml-1 text-[11px] text-slate-400">(학생 목록에 없음)</span>`;
                 const preview = escapeHtml(getCounselingListPreview(n));
+                const registered = isCounselingRegistered(n);
                 const tip = escapeHtml(
                   [n.enrollmentPurpose, n.specialNotes].filter(Boolean).join("\n") || getCounselingListPreview(n)
                 );
@@ -922,6 +1264,16 @@
                 <td class="px-4 py-3 text-sm font-medium text-slate-900 md:px-6">${nameCell}</td>
                 <td class="max-w-md px-4 py-3 text-sm text-slate-700 md:px-6">
                   <p class="line-clamp-2 break-words" title="${tip}">${preview || "—"}</p>
+                </td>
+                <td class="whitespace-nowrap px-4 py-3 md:px-6">
+                  <span class="inline-flex items-center gap-1 rounded-full ${
+                    registered
+                      ? "bg-emerald-50 text-emerald-700"
+                      : "bg-slate-100 text-slate-600"
+                  } px-2.5 py-1 text-[11px] font-medium">
+                    <i class="fa-solid ${registered ? "fa-user-check" : "fa-user-clock"} text-[10px]"></i>
+                    ${registered ? "등록 완료" : "미등록"}
+                  </span>
                 </td>
                 <td class="whitespace-nowrap px-4 py-3 text-right md:px-6">
                   <button type="button" class="counseling-edit inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-brand-600" data-id="${escapeHtml(r.id)}" title="수정" aria-label="수정">
@@ -935,47 +1287,54 @@
               })
               .join("");
 
-    const noStudentsBlock =
-      !state.isStudentsLoading && state.students.length === 0
-        ? `<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            등록된 학생이 없습니다. <strong>학생 관리</strong>에서 학생을 먼저 추가한 뒤 상담 기록을 남길 수 있습니다.
-          </div>`
-        : "";
-
     return `
       <section class="mb-6 flex flex-col gap-1 md:flex-row md:items-end md:justify-between">
         <div>
           <h2 class="text-xl font-semibold text-slate-900 md:text-2xl">상담기록</h2>
           <p class="mt-1 text-sm text-slate-500">
-            수강생 상담 기록지 양식으로 입력한 내용이 저장되며, 목록에서 수정·삭제할 수 있습니다.
+            수강생 상담 기록지 양식으로 입력한 내용이 저장되며, 학생 등록 여부와 전환 상황도 함께 볼 수 있습니다.
           </p>
         </div>
         <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <label class="sr-only" for="counseling-list-filter">목록 학생 필터</label>
-          <select id="counseling-list-filter" class="form-input min-w-[200px] text-sm">
-            ${filterOptionsHtml}
+          <label class="sr-only" for="counseling-status-filter">상담 상태 필터</label>
+          <select id="counseling-status-filter" class="form-input min-w-[200px] text-sm">
+            ${statusOptionsHtml}
           </select>
         </div>
       </section>
 
+      <section class="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p class="text-xs font-medium text-slate-500">전체 상담</p>
+          <p class="mt-2 text-xl font-semibold text-slate-900">${formatNumber(stats.total)}건</p>
+          <p class="mt-1 text-[11px] text-slate-400">누적 상담 기록</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p class="text-xs font-medium text-slate-500">등록 완료</p>
+          <p class="mt-2 text-xl font-semibold text-emerald-700">${formatNumber(stats.registered)}건</p>
+          <p class="mt-1 text-[11px] text-slate-400">연락처 연계 또는 수동 체크 기준</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p class="text-xs font-medium text-slate-500">전환율</p>
+          <p class="mt-2 text-xl font-semibold text-slate-900">${stats.rate.toFixed(1)}%</p>
+          <p class="mt-1 text-[11px] text-slate-400">미등록 ${formatNumber(stats.pending)}건</p>
+        </div>
+      </section>
+
       <section class="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-6">
-        <p class="mb-3 text-xs font-medium text-slate-500">${isEditing ? "기록 수정" : "새 기록"}</p>
-        ${noStudentsBlock}
         <form id="counseling-form" class="counseling-form-wrap" novalidate>
           <div class="counseling-sheet">
             <header class="counseling-sheet-header">
               <div class="counseling-sheet-header-left">
                 <p class="counseling-sheet-brand">하오팅 중국어</p>
                 <p class="counseling-sheet-instructor-line">
-                  <span class="counseling-sheet-instructor-label">담당 강사</span>
-                  <input
-                    type="text"
-                    name="assignedInstructor"
+                  <span class="counseling-sheet-instructor-label">상담자<span class="req">*</span></span>
+                  <select
+                    name="counselorName"
                     class="counseling-sheet-instructor-input"
-                    value="${escapeHtml(d.assignedInstructor)}"
-                    placeholder="이름"
-                    autocomplete="off"
-                  />
+                  >
+                    ${renderCounselorSelectOptions(d.counselorName)}
+                  </select>
                 </p>
               </div>
               <div class="counseling-sheet-header-center">
@@ -994,19 +1353,16 @@
             </header>
 
             <div class="counseling-sheet-date-bar">
-              <label class="counseling-sheet-date-label" for="counseling-date">상담 날짜</label>
+              <label class="counseling-sheet-date-label" for="counseling-date">상담 날짜<span class="req">*</span></label>
               <input id="counseling-date" name="counselingDate" type="date" required class="counseling-sheet-date-input" value="${escapeHtml(draftDate)}" />
+              <label class="counseling-inline ml-auto">
+                <input type="checkbox" name="didRegister" value="1"${ichk("didRegister")} />
+                상담 후 등록 완료
+              </label>
             </div>
-
-            <div class="counseling-sheet-link-student">
-              <label class="counseling-mini-label" for="counseling-student">관리 목록 학생<span class="req">*</span></label>
-              <select id="counseling-student" name="studentId" required class="form-input max-w-md text-sm" ${
-                state.students.length === 0 ? "disabled" : ""
-              }>
-                ${studentOptionsHtml}
-              </select>
-              <p class="counseling-sheet-hint">선택 시 이름·연락처·지역·담당 강사가 01 항목에 자동으로 채워집니다. 필요하면 수정하세요.</p>
-            </div>
+            <p class="counseling-sheet-hint">
+              학생 관리의 연락처와 같으면 학생 상세에서 상담 목적·목표가 자동으로 연계됩니다.
+            </p>
 
             <div class="counseling-section">
               <div class="counseling-section-bar">
@@ -1015,15 +1371,17 @@
               </div>
               <div class="counseling-s01-grid">
                 <div class="counseling-field">
-                  <label class="counseling-cell-label" for="cf-record-name">이름</label>
+                  <label class="counseling-cell-label" for="cf-record-name">이름<span class="req">*</span></label>
                   <input id="cf-record-name" name="recordName" type="text" class="form-input" value="${escapeHtml(d.recordName)}" />
                 </div>
                 <div class="counseling-field">
-                  <label class="counseling-cell-label" for="cf-record-contact">연락처</label>
-                  <input id="cf-record-contact" name="recordContact" type="text" class="form-input" value="${escapeHtml(d.recordContact)}" inputmode="tel" />
+                  <label class="counseling-cell-label" for="cf-record-contact">연락처<span class="req">*</span></label>
+                  <input id="cf-record-contact" name="recordContact" type="text" class="form-input" value="${escapeHtml(
+                    d.recordContact
+                  )}" inputmode="tel" maxlength="13" placeholder="010-1234-5678" />
                 </div>
                 <div class="counseling-field counseling-field-span2">
-                  <span class="counseling-cell-label">희망 수업 방식</span>
+                  <span class="counseling-cell-label">희망 수업 방식<span class="req">*</span></span>
                   <div class="counseling-radio-row">
                     <label class="counseling-inline"><input type="radio" name="classFormat" value="1:1"${fmt("1:1")} /> 1:1</label>
                     <label class="counseling-inline"><input type="radio" name="classFormat" value="소규모"${fmt("소규모")} /> 소규모</label>
@@ -1032,7 +1390,7 @@
                   </div>
                 </div>
                 <div class="counseling-field counseling-field-span2">
-                  <label class="counseling-cell-label" for="cf-record-region">지역</label>
+                  <label class="counseling-cell-label" for="cf-record-region">지역<span class="req">*</span></label>
                   <input id="cf-record-region" name="recordRegion" type="text" class="form-input" value="${escapeHtml(d.recordRegion)}" />
                 </div>
               </div>
@@ -1141,6 +1499,7 @@
                 <th class="whitespace-nowrap px-4 py-3 md:px-6">상담일</th>
                 <th class="whitespace-nowrap px-4 py-3 md:px-6">이름</th>
                 <th class="px-4 py-3 md:px-6">요약</th>
+                <th class="whitespace-nowrap px-4 py-3 md:px-6">등록 여부</th>
                 <th class="whitespace-nowrap px-4 py-3 text-right md:px-6"><span class="sr-only">작업</span></th>
               </tr>
             </thead>
@@ -1154,20 +1513,21 @@
   }
 
   function bindCounselingViewEvents() {
-    const filterSel = document.getElementById("counseling-list-filter");
+    const filterSel = document.getElementById("counseling-status-filter");
     if (filterSel) {
       filterSel.addEventListener("change", () => {
-        state.counselingListFilterStudentId = String(filterSel.value || "");
+        state.counselingStatusFilter = String(filterSel.value || "all");
         render();
       });
     }
 
-    const stSel = document.getElementById("counseling-student");
-    if (stSel) {
-      stSel.addEventListener("change", () => {
-        state.counselingDraft.studentId = String(stSel.value || "").trim();
-        applyStudentDataToCounselingDraft(state.counselingDraft.studentId);
-        render();
+    const contactInput = document.getElementById("cf-record-contact");
+    if (contactInput) {
+      contactInput.addEventListener("input", () => {
+        contactInput.value = formatContactAsTyping(contactInput.value);
+      });
+      contactInput.addEventListener("blur", () => {
+        contactInput.value = normalizeKoreanMobileContact(contactInput.value);
       });
     }
 
@@ -1180,7 +1540,8 @@
     }
 
     document.querySelectorAll(".counseling-edit").forEach((btn) => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
         const id = btn.getAttribute("data-id");
         const rec = state.counselingRecords.find((r) => r.id === id);
         if (!rec) return;
@@ -1191,7 +1552,8 @@
     });
 
     document.querySelectorAll(".counseling-delete").forEach((btn) => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
         const id = btn.getAttribute("data-id");
         const rec = state.counselingRecords.find((r) => r.id === id);
         const name = rec ? rec.recordName || getStudentNameById(rec.studentId) : "";
@@ -1217,8 +1579,22 @@
       });
     });
 
+    document.querySelectorAll(".counseling-row").forEach((row) => {
+      row.addEventListener("click", () => {
+        const id = row.dataset.counselingId;
+        openCounselingDetailModal(id);
+      });
+    });
+
     const form = document.getElementById("counseling-form");
     if (form) {
+      form.addEventListener("keydown", (e) => {
+        const target = e.target;
+        const tagName = target && target.tagName ? String(target.tagName).toUpperCase() : "";
+        if (e.key === "Enter" && tagName !== "TEXTAREA") {
+          e.preventDefault();
+        }
+      });
       form.addEventListener("submit", handleCounselingFormSubmit);
     }
   }
@@ -1241,11 +1617,12 @@
       }
     }
     return {
-      assignedInstructor: val("assignedInstructor"),
+      counselorName: val("counselorName"),
       recordName: val("recordName"),
-      recordContact: val("recordContact"),
+      recordContact: normalizeKoreanMobileContact(val("recordContact")),
       recordRegion: val("recordRegion"),
       classFormat,
+      didRegister: chk("didRegister"),
       chBanner: chk("chBanner"),
       chInternet: chk("chInternet"),
       chReferral: chk("chReferral"),
@@ -1276,18 +1653,52 @@
     }
 
     const form = e.currentTarget;
-    const studentId = String(form.elements.studentId?.value || "").trim();
     const counselingDate = String(form.elements.counselingDate?.value || "").trim();
+    const counselorName = String(form.elements.counselorName?.value || "").trim();
+    const recordName = String(form.elements.recordName?.value || "").trim();
+    const recordContact = String(form.elements.recordContact?.value || "").trim();
+    const recordRegion = String(form.elements.recordRegion?.value || "").trim();
+    const classFormat = (() => {
+      const rf = form.elements.classFormat;
+      if (!rf) return "";
+      if (typeof rf.length === "number" && rf.length > 0) {
+        for (let i = 0; i < rf.length; i++) {
+          if (rf[i].checked) return String(rf[i].value || "").trim();
+        }
+        return "";
+      }
+      return rf.checked ? String(rf.value || "").trim() : "";
+    })();
 
-    if (!studentId) {
-      showToast("관리 목록에서 학생을 선택해 주세요.");
-      form.elements.studentId?.focus();
+    const missingLabels = [];
+    if (!counselorName) missingLabels.push("상담자");
+    if (!counselingDate) missingLabels.push("상담 날짜");
+    if (!recordName) missingLabels.push("상담 수강생 이름");
+    if (!recordContact) missingLabels.push("상담 수강생 연락처");
+    if (!classFormat) missingLabels.push("희망 수업 방식");
+    if (!recordRegion) missingLabels.push("상담 수강생 지역");
+
+    if (missingLabels.length > 0) {
+      showToast(`필수 항목을 입력해 주세요: ${missingLabels.join(", ")}`);
+      if (!counselorName) {
+        form.elements.counselorName?.focus();
+      } else if (!counselingDate) {
+        form.elements.counselingDate?.focus();
+      } else if (!recordName) {
+        form.elements.recordName?.focus();
+      } else if (!recordContact) {
+        form.elements.recordContact?.focus();
+      } else if (!classFormat) {
+        const firstRadio = form.querySelector('input[name="classFormat"]');
+        firstRadio?.focus();
+      } else if (!recordRegion) {
+        form.elements.recordRegion?.focus();
+      }
       return;
     }
-    if (!counselingDate) {
-      showToast("상담 날짜를 선택해 주세요.");
-      form.elements.counselingDate?.focus();
-      return;
+
+    if (form.elements.recordContact) {
+      form.elements.recordContact.value = normalizeKoreanMobileContact(form.elements.recordContact.value);
     }
 
     if (counselingFormSubmitting) {
@@ -1300,7 +1711,13 @@
 
     const editingId = state.counselingDraft.id;
     const fields = collectCounselingFieldsFromForm(form);
-    const payload = Object.assign({ studentId, counselingDate }, fields);
+    const payload = Object.assign(
+      {
+        studentId: state.counselingDraft.studentId || "",
+        counselingDate,
+      },
+      fields
+    );
 
     try {
       if (editingId) {
@@ -1517,6 +1934,7 @@
     const num = Number(rowIndex) + 1;
     const isExpanded = state.expandedRowIds.has(s.id);
     const completedSessions = getStudentSessionCount(s);
+    const renewalCount = getStudentRenewalCount(s);
     const statusBadge = s.isActive
       ? '<span class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 md:px-2.5 md:text-xs"><i class="fa-solid fa-circle text-[6px]"></i>수강 중</span>'
       : '<span class="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 md:px-2.5 md:text-xs"><i class="fa-solid fa-circle text-[6px]"></i>휴원·퇴원</span>';
@@ -1543,7 +1961,7 @@
         <td class="whitespace-nowrap px-4 py-3.5 text-right tabular-nums text-slate-700 md:px-6">
           <div class="flex flex-col items-end">
             <span>${formatNumber(s.registeredSessions || 0)}회</span>
-            <span class="mt-0.5 text-[11px] text-slate-400">${formatNumber(completedSessions)}회 진행</span>
+            <span class="mt-0.5 text-[11px] text-slate-400">${formatNumber(completedSessions)}회 진행 · 재등록 ${formatNumber(renewalCount)}회</span>
           </div>
         </td>
         <td class="hidden px-4 py-3.5 text-slate-600 md:table-cell md:px-6">
@@ -1589,11 +2007,14 @@
   }
 
   function getStudentDetailSections(student) {
+    const linkedCounseling = getLatestCounselingForStudent(student);
+    const renewalCount = getStudentRenewalCount(student);
     return [
       {
         title: "기본 정보",
         items: [
           { label: "학생 이름", value: student.name },
+          { label: "생년월일", value: formatDate(student.birthDate) },
           { label: "담당 강사", value: student.assignedInstructor },
           { label: "연락처", value: student.contact },
           { label: "지역", value: student.region },
@@ -1635,6 +2056,36 @@
           { label: "비고", value: student.notes, fullWidth: true, multiline: true },
         ],
       },
+      {
+        title: "재등록 / 상담 연계",
+        items: [
+          { label: "재등록 횟수", value: formatCountWithUnit(renewalCount, "회") },
+          {
+            label: "재등록 기록",
+            value: formatRenewalHistoryForDisplay(student.renewalHistory),
+            fullWidth: true,
+            multiline: true,
+          },
+          { label: "연계 상담일", value: linkedCounseling ? formatDate(linkedCounseling.counselingDate) : "-" },
+          {
+            label: "등록 여부",
+            value: linkedCounseling ? (isCounselingRegistered(linkedCounseling) ? "등록 완료" : "미등록") : "-",
+          },
+          { label: "상담자", value: linkedCounseling ? linkedCounseling.counselorName : "-" },
+          {
+            label: "상담 목적",
+            value: linkedCounseling ? linkedCounseling.enrollmentPurpose : "-",
+            fullWidth: true,
+            multiline: true,
+          },
+          {
+            label: "상담 목표",
+            value: linkedCounseling ? linkedCounseling.goalWithPeriod : "-",
+            fullWidth: true,
+            multiline: true,
+          },
+        ],
+      },
     ];
   }
 
@@ -1644,6 +2095,7 @@
       student.lastClassDate && String(student.lastClassDate).trim()
         ? `마지막 수강 ${formatDate(student.lastClassDate)}`
         : "마지막 수강일 미입력";
+    const renewalCount = getStudentRenewalCount(student);
 
     return `
       <div class="student-detail-summary">
@@ -1658,6 +2110,7 @@
             ${escapeHtml(getStudentStatusLabel(student))}
           </span>
           <span class="student-detail-chip">${escapeHtml(formatCountWithUnit(student.registeredSessions, "회 등록"))}</span>
+          <span class="student-detail-chip">${escapeHtml(`재등록 ${formatNumber(renewalCount)}회`)}</span>
           <span class="student-detail-chip">${escapeHtml(latestClassLabel)}</span>
         </div>
       </div>
@@ -1712,10 +2165,13 @@
     const sessionSlots = getStudentSessionSlots(s);
     const completedCount = sessionSlots.filter((item) => item.isCompleted).length;
     const remainingCount = Math.max(sessionSlots.length - completedCount, 0);
+    const renewalHistory = normalizeRenewalHistory(s.renewalHistory);
+    const renewalCount = renewalHistory.length;
     const activeSessionNumber = state.expandedSessionPanelByStudent[s.id] || null;
     const activeSlot =
       sessionSlots.find((item) => item.sessionNumber === activeSessionNumber) || null;
     const items = [
+      { label: "생년월일", value: formatDate(s.birthDate) },
       { label: "지역", value: s.region },
       { label: "수업장소", value: s.location },
       { label: "연락처", value: s.contact },
@@ -1774,6 +2230,56 @@
                   <span class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 font-medium text-amber-700">
                     남음 ${formatNumber(remainingCount)}회
                   </span>
+                  <span class="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2.5 py-1 font-medium text-sky-700">
+                    재등록 ${formatNumber(renewalCount)}회
+                  </span>
+                </div>
+              </div>
+              <div class="renewal-manager-card mb-4 rounded-lg border border-slate-200 bg-slate-50/80 p-4">
+                <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <p class="text-sm font-semibold text-slate-900">재등록 기록</p>
+                    <p class="mt-1 text-xs text-slate-500">재등록할 때 추가 회차를 기록하면 남은 회차와 이력이 함께 관리됩니다.</p>
+                  </div>
+                  <form class="renewal-form grid gap-2 sm:grid-cols-[120px_120px_minmax(0,1fr)_auto]" data-student-id="${escapeHtml(
+                    s.id
+                  )}">
+                    <input type="date" name="renewalDate" class="form-input text-sm" value="${escapeHtml(todayISO())}" />
+                    <input type="number" name="addedSessions" min="1" class="form-input text-sm" placeholder="추가 회차" />
+                    <input type="text" name="note" class="form-input text-sm" placeholder="메모 (선택)" />
+                    <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-lg bg-brand-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-brand-700">
+                      <i class="fa-solid fa-plus"></i>
+                      추가
+                    </button>
+                  </form>
+                </div>
+                <div class="mt-3 space-y-2">
+                  ${
+                    renewalHistory.length === 0
+                      ? `<div class="rounded-lg border border-dashed border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">
+                          아직 재등록 기록이 없습니다.
+                        </div>`
+                      : renewalHistory
+                          .map(
+                            (entry) => `
+                        <div class="renewal-history-item flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm">
+                          <div class="min-w-0">
+                            <p class="font-medium text-slate-800">${escapeHtml(
+                              formatDate(entry.renewalDate)
+                            )} · ${escapeHtml(formatCountWithUnit(entry.addedSessions, "회 추가"))}</p>
+                            ${
+                              entry.note
+                                ? `<p class="mt-1 text-xs text-slate-500">${escapeHtml(entry.note)}</p>`
+                                : ""
+                            }
+                          </div>
+                          <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600">
+                            누적 ${escapeHtml(formatCountWithUnit(s.registeredSessions, "회"))}
+                          </span>
+                        </div>`
+                          )
+                          .join("")
+                  }
                 </div>
               </div>
               ${
@@ -2325,6 +2831,7 @@
       next = next.filter((s) => {
         return [
           s.name,
+          s.birthDate,
           s.assignedInstructor,
           s.contact,
           s.curriculum,
@@ -2406,6 +2913,18 @@
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         toggleExpandedRow(btn.dataset.id);
+      });
+    });
+
+    document.querySelectorAll(".renewal-form").forEach((formEl) => {
+      formEl.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const studentId = formEl.dataset.studentId;
+        const addedSessions = Number(formEl.elements.addedSessions?.value || 0);
+        const renewalDate = String(formEl.elements.renewalDate?.value || "").trim() || todayISO();
+        const note = String(formEl.elements.note?.value || "").trim();
+        await addStudentRenewalHistory(studentId, { renewalDate, addedSessions, note });
       });
     });
 
@@ -2548,6 +3067,7 @@
     modal.style.setProperty("display", "none", "important");
     document.body.style.overflow = "";
     state.editingId = null;
+    state.pendingCounselingLinkId = null;
   }
 
   function openStudentDetailModal(id) {
@@ -2593,9 +3113,53 @@
     fillStudentDetailModal(student);
   }
 
+  function openCounselingDetailModal(id) {
+    const modal = document.getElementById("counseling-detail-modal");
+    if (!modal) return;
+
+    const record = state.counselingRecords.find((item) => item.id === id);
+    if (!record) {
+      showToast("상담 기록을 찾을 수 없습니다.");
+      return;
+    }
+
+    state.detailCounselingId = id;
+    fillCounselingDetailModal(record);
+    modal.removeAttribute("hidden");
+    modal.style.removeProperty("display");
+    modal.classList.remove("hidden");
+    modal.classList.add("modal-open");
+    document.body.style.overflow = "hidden";
+  }
+
+  function closeCounselingDetailModal() {
+    const modal = document.getElementById("counseling-detail-modal");
+    if (!modal) return;
+    modal.classList.remove("modal-open");
+    modal.classList.add("hidden");
+    modal.setAttribute("hidden", "");
+    modal.style.setProperty("display", "none", "important");
+    document.body.style.overflow = "";
+    state.detailCounselingId = null;
+  }
+
+  function syncCounselingDetailModal() {
+    const modal = document.getElementById("counseling-detail-modal");
+    if (!modal || !modal.classList.contains("modal-open") || !state.detailCounselingId) return;
+
+    const record = state.counselingRecords.find((item) => item.id === state.detailCounselingId);
+    if (!record) {
+      closeCounselingDetailModal();
+      return;
+    }
+
+    fillCounselingDetailModal(record);
+  }
+
   function resetForm(form) {
     form.reset();
     form.elements.id.value = "";
+    form.elements.birthDate.value = "";
     form.elements.registrationDate.value = todayISO();
     form.elements.lastClassDate.value = todayISO();
     form.elements.isActive.checked = true;
@@ -2611,6 +3175,7 @@
   function fillFormFromStudent(form, s) {
     form.elements.id.value = s.id || "";
     form.elements.name.value = s.name || "";
+    form.elements.birthDate.value = s.birthDate || "";
     ensureInstructorOption(form, s.assignedInstructor);
     form.elements.assignedInstructor.value = s.assignedInstructor || "";
     form.elements.contact.value = s.contact || "";
@@ -2666,6 +3231,7 @@
       : SCHEDULE_DAY_DISPLAY_ORDER.filter((d) => checkedDays.includes(d));
     return {
       name: String(fd.get("name") || "").trim(),
+      birthDate: String(fd.get("birthDate") || "").trim(),
       assignedInstructor: String(fd.get("assignedInstructor") || "").trim(),
       registeredSessions: toNumber("registeredSessions"),
       registrationDate: String(fd.get("registrationDate") || "").trim(),
@@ -2695,6 +3261,7 @@
         });
         return normalizeScheduleDayTimesMap(map);
       })(),
+      renewalHistory: [],
     };
   }
 
@@ -2904,6 +3471,14 @@
     if (contactInput) contactInput.value = normalizeKoreanMobileContact(contactInput.value);
 
     const draft = readDraftFromForm(form);
+    const editingIdBeforeSave = state.editingId;
+    const pendingCounselingLinkId = state.pendingCounselingLinkId;
+    const existingStudent = editingIdBeforeSave
+      ? state.students.find((item) => item.id === editingIdBeforeSave) || null
+      : null;
+    draft.renewalHistory = existingStudent
+      ? normalizeRenewalHistory(existingStudent.renewalHistory)
+      : [];
 
     if (!validateStudentFormRequired(form, draft)) {
       return;
@@ -2922,8 +3497,7 @@
     const submitBtn = document.getElementById("student-form-submit");
     if (submitBtn) submitBtn.disabled = true;
 
-    const editingIdBeforeSave = state.editingId;
-    const successToast = editingIdBeforeSave
+    let successToast = editingIdBeforeSave
       ? "학생 정보가 수정되었습니다."
       : "새 학생이 추가되었습니다.";
 
@@ -2934,10 +3508,27 @@
 
     try {
       console.log("3. Firebase로 데이터 전송 시도 중...");
+      let savedStudentId = editingIdBeforeSave;
       if (editingIdBeforeSave) {
         await updateStudent(editingIdBeforeSave, draft);
       } else {
-        await createStudent(draft);
+        savedStudentId = await createStudent(draft);
+      }
+
+      if (pendingCounselingLinkId && savedStudentId) {
+        try {
+          await updateCounselingRecord(pendingCounselingLinkId, {
+            studentId: savedStudentId,
+            didRegister: true,
+            recordName: draft.name,
+            recordContact: draft.contact,
+            recordRegion: draft.region,
+          });
+          successToast = "새 학생이 추가되고 상담 기록과 연결되었습니다.";
+        } catch (linkErr) {
+          console.error("[linkCounselingAfterStudentCreate]", linkErr);
+          successToast = "학생은 추가되었지만 상담 기록 연결은 실패했습니다.";
+        }
       }
       console.log("4. 데이터 저장 성공! 이제 창을 닫습니다."); 
   
@@ -3180,7 +3771,7 @@
     state.filter = "all";
     state.keyword = "";
     state.salesFilter = "all";
-    state.counselingListFilterStudentId = "";
+    state.counselingStatusFilter = "all";
     state.counselingDraft = emptyCounselingDraft();
 
     closeMobileMenu();
@@ -3256,6 +3847,13 @@
       btn.addEventListener("click", closeStudentDetailModal);
     });
 
+    document.querySelectorAll("#counseling-detail-modal .counseling-detail-close").forEach((btn) => {
+      btn.addEventListener("click", closeCounselingDetailModal);
+    });
+    document
+      .getElementById("counseling-detail-primary-btn")
+      ?.addEventListener("click", handleCounselingDetailPrimaryAction);
+
     // 학생 모달 백드롭 클릭으로 닫기
     const studentModal = document.getElementById("student-modal");
     if (studentModal) {
@@ -3271,10 +3869,21 @@
       });
     }
 
+    const counselingDetailModal = document.getElementById("counseling-detail-modal");
+    if (counselingDetailModal) {
+      counselingDetailModal.addEventListener("click", (e) => {
+        if (e.target === counselingDetailModal) closeCounselingDetailModal();
+      });
+    }
+
     // ESC 키로 모달 닫기
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
-      // 우선순위: 학생 상세 모달 → 학생 수정 모달 → 모바일 사이드바
+      // 우선순위: 상담 상세 모달 → 학생 상세 모달 → 학생 수정 모달 → 모바일 사이드바
+      if (document.getElementById("counseling-detail-modal")?.classList.contains("modal-open")) {
+        closeCounselingDetailModal();
+        return;
+      }
       if (document.getElementById("student-detail-modal")?.classList.contains("modal-open")) {
         closeStudentDetailModal();
         return;

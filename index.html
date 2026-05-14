@@ -339,6 +339,11 @@
             </div>
 
             <div>
+              <label class="form-label" for="f-birth-date">생년월일</label>
+              <input id="f-birth-date" name="birthDate" type="date" class="form-input" />
+            </div>
+
+            <div>
               <label class="form-label" for="f-instructor">담당 강사<span class="req">*</span></label>
               <select id="f-instructor" name="assignedInstructor" required class="form-input">
                 <option value="" disabled selected>강사를 선택하세요</option>
@@ -612,6 +617,56 @@
           <button
             type="button"
             class="student-detail-close rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+          >
+            닫기
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============== 상담 기록 상세 모달 ============== -->
+    <div
+      id="counseling-detail-modal"
+      class="fixed inset-0 z-[56] hidden items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="counseling-detail-modal-title"
+    >
+      <div
+        class="flex max-h-[90vh] min-h-0 w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+      >
+        <div class="flex items-start justify-between border-b border-slate-200 px-6 py-4">
+          <div>
+            <h2 id="counseling-detail-modal-title" class="text-lg font-semibold text-slate-900">
+              상담 기록 상세
+            </h2>
+            <p id="counseling-detail-modal-subtitle" class="mt-0.5 text-sm text-slate-500">
+              상담 기록지에 입력된 내용을 읽기 전용으로 확인합니다.
+            </p>
+          </div>
+          <button
+            type="button"
+            class="counseling-detail-close rounded-md p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+            aria-label="닫기"
+          >
+            <i class="fa-solid fa-xmark text-lg"></i>
+          </button>
+        </div>
+        <div id="counseling-detail-modal-body" class="min-h-0 flex-1 overflow-y-auto px-6 py-5"></div>
+        <div
+          class="relative z-10 flex shrink-0 items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-6 py-4"
+        >
+          <button
+            type="button"
+            id="counseling-detail-primary-btn"
+            class="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700"
+          >
+            <i class="fa-solid fa-user-plus"></i>
+            <span id="counseling-detail-primary-label">이 기록으로 학생 등록</span>
+          </button>
+          <button
+            type="button"
+            class="counseling-detail-close rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
           >
             닫기
           </button>
