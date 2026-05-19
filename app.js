@@ -38,6 +38,8 @@
   ];
   const STUDENT_SORT_OPTIONS = [
     { value: "default", label: "기본순" },
+    { value: "name-asc", label: "이름 가나다순" },
+    { value: "name-desc", label: "이름 역순" },
     { value: "session-price-desc", label: "수업 1회당 비용 높은순" },
     { value: "session-price-asc", label: "수업 1회당 비용 낮은순" },
   ];
@@ -132,6 +134,8 @@
     keyword: "",
     courseTrackFilter: "all", // "all" | "basic" | "conversation" | "certification"
     studentSort: "default",
+    studentDashboardFilter: null, // null | "today-class" | "renewal-due"
+    sessionNotifySelectionByStudent: {}, // 학생별 안내 문자에 포함할 전체 회차 번호
     editingId: null, // 모달이 수정 모드일 때의 학생 id
     pendingDeleteId: null, // 확인 모달에서 삭제 대상
     salesFilter: "all", // 매출 화면 필터: "all" | "active"
@@ -515,6 +519,13 @@
     if (!hasActiveInGroup) {
       delete state.expandedSessionPanelByStudent[studentId];
     }
+    const groupSessionNumbers = new Set(target.slots.map((slot) => slot.sessionNumber));
+    const selection = getSessionNotifySelection(studentId).filter((n) => groupSessionNumbers.has(n));
+    if (selection.length > 0) {
+      state.sessionNotifySelectionByStudent[studentId] = selection;
+    } else {
+      delete state.sessionNotifySelectionByStudent[studentId];
+    }
     render();
   }
 
@@ -605,6 +616,47 @@
     return WEEKDAYS[d.getDay()];
   }
 
+  function normalizeTimeInputValue(value) {
+    const trimmed = String(value || "").trim();
+    if (!trimmed) return "";
+    const parts = trimmed.split(":");
+    if (parts.length < 2) return trimmed;
+    const hh = Number(parts[0]);
+    const mm = Number(parts[1]);
+    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return trimmed;
+    const safeHh = Math.min(23, Math.max(0, Math.trunc(hh)));
+    const safeMm = Math.min(59, Math.max(0, Math.trunc(mm)));
+    return `${String(safeHh).padStart(2, "0")}:${String(safeMm).padStart(2, "0")}`;
+  }
+
+  function normalizeDateInputValue(value) {
+    const trimmed = String(value || "").trim();
+    if (!trimmed) return "";
+    const match = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (!match) return trimmed;
+    const month = String(Number(match[2])).padStart(2, "0");
+    const day = String(Number(match[3])).padStart(2, "0");
+    return `${match[1]}-${month}-${day}`;
+  }
+
+  function wireTemporalInputAutoFormat(root) {
+    const scope = root && root.querySelectorAll ? root : document;
+    scope.querySelectorAll('input[type="date"], input[type="time"]').forEach((input) => {
+      if (input.dataset.temporalAutoFormat === "true") return;
+      input.dataset.temporalAutoFormat = "true";
+      input.addEventListener("blur", () => {
+        const normalized =
+          input.type === "date"
+            ? normalizeDateInputValue(input.value)
+            : normalizeTimeInputValue(input.value);
+        if (normalized && normalized !== input.value) {
+          input.value = normalized;
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      });
+    });
+  }
+
   function formatTimeForMessage(value) {
     const trimmed = String(value || "").trim();
     if (!trimmed) return "";
@@ -634,20 +686,51 @@
     return start || end || "";
   }
 
-  function buildSessionNotificationMessage(student, slot) {
-    if (!student || !slot) return "";
-    const dateLabel = formatScheduledDateForMessage(slot.sessionDate);
-    const timeLabel = buildScheduledTimeRangeText(slot.startTime, slot.endTime);
-    if (!dateLabel || !timeLabel) return "";
+  function getSessionNotifySelection(studentId) {
+    const list = state.sessionNotifySelectionByStudent[studentId];
+    return Array.isArray(list) ? list.filter((n) => Number.isInteger(n) && n > 0) : [];
+  }
+
+  function getSessionSlotsForNotification(student, slots) {
+    const slotList = (Array.isArray(slots) ? slots : slots ? [slots] : []).filter(Boolean);
+    if (slotList.length === 0) return [];
+    return slotList
+      .filter((slot) => {
+        const dateLabel = formatScheduledDateForMessage(slot.sessionDate);
+        const timeLabel = buildScheduledTimeRangeText(slot.startTime, slot.endTime);
+        return !!dateLabel && !!timeLabel;
+      })
+      .sort((a, b) => a.sessionNumber - b.sessionNumber);
+  }
+
+  function buildSessionNotificationMessage(student, slots) {
+    if (!student) return "";
+    const readySlots = getSessionSlotsForNotification(student, slots);
+    if (readySlots.length === 0) return "";
     const rawName = String(student.name || "").trim();
     const studentName = rawName.length > 1 ? rawName.slice(1) : rawName;
     if (!studentName) return "";
-    const totalSessions = Math.max(0, Number(student.registeredSessions) || 0);
-    const scheduleText = `${dateLabel} ${timeLabel}`.trim();
-    return SESSION_NOTIFICATION_TEMPLATE
-      .replace("[이름]", studentName)
+    const first = readySlots[0];
+    const totalSessions =
+      Math.max(0, Number(first.totalSessionsInGroup) || 0) ||
+      Math.max(0, Number(student.registeredSessions) || 0);
+    const sessionNumbers = readySlots.map(
+      (slot) => slot.localSessionNumber || slot.sessionNumber
+    );
+    const sessionLabel =
+      sessionNumbers.length === 1
+        ? String(sessionNumbers[0])
+        : sessionNumbers.map((value) => formatNumber(value)).join("/");
+    const scheduleText = readySlots
+      .map((slot) => {
+        const dateLabel = formatScheduledDateForMessage(slot.sessionDate);
+        const timeLabel = buildScheduledTimeRangeText(slot.startTime, slot.endTime);
+        return `${dateLabel} ${timeLabel}`.trim();
+      })
+      .join("\n");
+    return SESSION_NOTIFICATION_TEMPLATE.replace("[이름]", studentName)
       .replace("[총 회차]", String(totalSessions))
-      .replace("[당 수업 회차]", String(slot.sessionNumber))
+      .replace("[당 수업 회차]", sessionLabel)
       .replace("[수업 일정]", scheduleText);
   }
 
@@ -883,12 +966,19 @@
 
   function toggleSessionDetail(studentId, sessionNumber) {
     if (!studentId || !sessionNumber) return;
-    const current = state.expandedSessionPanelByStudent[studentId];
-    if (current === sessionNumber) {
-      delete state.expandedSessionPanelByStudent[studentId];
+    const selection = getSessionNotifySelection(studentId);
+    const idx = selection.indexOf(sessionNumber);
+    if (idx >= 0) {
+      selection.splice(idx, 1);
     } else {
-      state.expandedSessionPanelByStudent[studentId] = sessionNumber;
+      selection.push(sessionNumber);
     }
+    if (selection.length > 0) {
+      state.sessionNotifySelectionByStudent[studentId] = selection;
+    } else {
+      delete state.sessionNotifySelectionByStudent[studentId];
+    }
+    state.expandedSessionPanelByStudent[studentId] = sessionNumber;
     render();
   }
 
@@ -1267,6 +1357,9 @@
         Object.keys(state.expandedSessionPanelByStudent).forEach((id) => {
           if (!valid.has(id)) delete state.expandedSessionPanelByStudent[id];
         });
+        Object.keys(state.sessionNotifySelectionByStudent).forEach((id) => {
+          if (!valid.has(id)) delete state.sessionNotifySelectionByStudent[id];
+        });
         Object.keys(state.editingRenewalEntryByStudent).forEach((id) => {
           if (!valid.has(id)) delete state.editingRenewalEntryByStudent[id];
         });
@@ -1566,6 +1659,24 @@
     const today = new Date();
     const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999);
     return end <= endOfMonth;
+  }
+
+  function filterStudentsByDashboard(list, dashboardFilter) {
+    if (!dashboardFilter) return list;
+    if (dashboardFilter === "today-class") {
+      const todayWeekday = getTodayWeekdayKor();
+      return list.filter((s) => {
+        if (!s.isActive || !Array.isArray(s.scheduleDays) || s.scheduleDays.length === 0) return false;
+        const onlyFlexible =
+          s.scheduleDays.length === 1 && String(s.scheduleDays[0]).trim() === SCHEDULE_FLEXIBLE_DAY;
+        if (onlyFlexible) return false;
+        return s.scheduleDays.includes(todayWeekday);
+      });
+    }
+    if (dashboardFilter === "renewal-due") {
+      return list.filter((s) => isRenewalDueThisMonth(s));
+    }
+    return list;
   }
 
   function showToast(message) {
@@ -2188,6 +2299,7 @@
         sub: "등록 누적",
         icon: "fa-users",
         accent: "bg-slate-100 text-slate-600",
+        dashboardFilter: "",
       },
       {
         label: "수강 중",
@@ -2195,20 +2307,23 @@
         sub: "활동 중인 학생",
         icon: "fa-user-check",
         accent: "bg-emerald-100 text-emerald-600",
+        dashboardFilter: "",
       },
       {
         label: "오늘 수업 일정",
         value: formatStudentNames(todayClasses) || "예정 없음",
-        sub: todaySubLabel,
+        sub: `${todaySubLabel} · 클릭 시 목록 필터`,
         icon: "fa-calendar-day",
         accent: "bg-sky-100 text-sky-600",
+        dashboardFilter: "today-class",
       },
       {
         label: "이번달 재등록 필요",
         value: formatStudentNames(renewalDueStudents) || "예정 없음",
-        sub: "예상 종료일 기준",
+        sub: "예상 종료일 기준 · 클릭 시 목록 필터",
         icon: "fa-rotate-right",
         accent: "bg-amber-100 text-amber-600",
+        dashboardFilter: "renewal-due",
       },
     ];
 
@@ -2219,14 +2334,23 @@
       state.selectedStudentTabId,
       "all"
     );
-    const filteredStudents = applyFilters(
-      state.students,
-      state.filter,
-      state.keyword,
-      state.selectedStudentTabId,
-      state.courseTrackFilter
+    const filteredStudents = filterStudentsByDashboard(
+      applyFilters(
+        state.students,
+        state.filter,
+        state.keyword,
+        state.selectedStudentTabId,
+        state.courseTrackFilter
+      ),
+      state.studentDashboardFilter
     );
     const sortedFilteredStudents = sortStudents(filteredStudents, state.studentSort);
+    const dashboardFilterLabels = {
+      "today-class": "오늘 수업 일정",
+      "renewal-due": "이번달 재등록 필요",
+    };
+    const activeDashboardFilterLabel =
+      dashboardFilterLabels[state.studentDashboardFilter] || "";
     const sortOptionsHtml = STUDENT_SORT_OPTIONS.map(
       (option) => `
         <option value="${option.value}"${state.studentSort === option.value ? " selected" : ""}>
@@ -2253,11 +2377,40 @@
         </button>
       </section>
 
+      ${
+        activeDashboardFilterLabel
+          ? `<section class="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-800">
+              <span><strong>${escapeHtml(activeDashboardFilterLabel)}</strong> 학생만 표시 중 (${formatNumber(
+                sortedFilteredStudents.length
+              )}명)</span>
+              <button
+                type="button"
+                id="btn-clear-dashboard-filter"
+                class="inline-flex items-center gap-1 rounded-md border border-brand-200 bg-white px-2.5 py-1 text-xs font-medium text-brand-700 transition hover:bg-brand-100"
+              >
+                <i class="fa-solid fa-xmark"></i>
+                필터 해제
+              </button>
+            </section>`
+          : ""
+      }
+
       <section class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
         ${stats
           .map(
             (s) => `
-          <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div
+            class="student-stat-card rounded-xl border bg-white p-4 shadow-sm ${
+              s.dashboardFilter
+                ? "cursor-pointer transition hover:border-slate-300"
+                : "border-slate-200"
+            } ${
+              s.dashboardFilter && state.studentDashboardFilter === s.dashboardFilter
+                ? "border-brand-400 ring-2 ring-brand-200"
+                : "border-slate-200"
+            }"
+            ${s.dashboardFilter ? `data-dashboard-filter="${escapeHtml(s.dashboardFilter)}" role="button" tabindex="0"` : ""}
+          >
             <div class="flex items-center justify-between">
               <p class="text-xs font-medium text-slate-500">${escapeHtml(s.label)}</p>
               <span class="flex h-8 w-8 items-center justify-center rounded-lg ${s.accent}">
@@ -2808,8 +2961,12 @@
       paymentGroups.find((group) => group.id === selectedPaymentGroupId) || paymentGroups[0] || null;
     const visibleSessionSlots = currentPaymentGroup ? currentPaymentGroup.slots : sessionSlots;
     const activeSessionNumber = state.expandedSessionPanelByStudent[s.id] || null;
+    const notifySelection = getSessionNotifySelection(s.id);
     const activeSlot =
       visibleSessionSlots.find((item) => item.sessionNumber === activeSessionNumber) || null;
+    const notifySlots = visibleSessionSlots.filter((item) =>
+      notifySelection.includes(item.sessionNumber)
+    );
     const items = [
       { label: "생년월일", value: formatDate(s.birthDate) },
       { label: "지역", value: s.region },
@@ -2915,7 +3072,7 @@
                       type="number"
                       name="receivedAmount"
                       min="0"
-                      step="1000"
+                      step="100"
                       class="form-input text-sm"
                       placeholder="결제 금액"
                       value="${escapeHtml(editingRenewal ? String(editingRenewal.receivedAmount || "") : "")}"
@@ -3062,17 +3219,21 @@
                           </div>`
                         : ""
                     }
+                    <p class="mb-2 text-[11px] text-slate-500">회차 버튼을 여러 개 선택하면 안내 문자에 함께 포함됩니다.</p>
                     <div class="session-tabs-wrap mb-4 flex flex-wrap gap-2.5">
                       ${visibleSessionSlots
                         .map((slot) => {
                           const isActive = activeSessionNumber === slot.sessionNumber;
+                          const isNotifySelected = notifySelection.includes(slot.sessionNumber);
                           const tabStateClass = isActive
                             ? slot.isCompleted
                               ? "is-active is-complete"
                               : "is-active border-brand-500 bg-brand-50 text-brand-700"
-                            : slot.isCompleted
-                              ? "is-complete"
-                              : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50";
+                            : isNotifySelected
+                              ? "border-brand-300 bg-brand-50/60 text-brand-700"
+                              : slot.isCompleted
+                                ? "is-complete"
+                                : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50";
                           return `
                             <button
                               type="button"
@@ -3089,8 +3250,11 @@
                     ${
                       activeSlot
                         ? (() => {
-                            const messageText = buildSessionNotificationMessage(s, activeSlot);
-                            const hasMessage = !activeSlot.isCompleted && !!messageText;
+                            const messageSlots =
+                              notifySlots.length > 0 ? notifySlots : activeSlot ? [activeSlot] : [];
+                            const messageText = buildSessionNotificationMessage(s, messageSlots);
+                            const hasMessage =
+                              messageSlots.some((slot) => !slot.isCompleted) && !!messageText;
                             const scheduledSummary =
                               activeSlot.sessionDate || activeSlot.startTime || activeSlot.endTime
                                 ? `${formatScheduledDateForMessage(activeSlot.sessionDate) || "날짜 미입력"}${
@@ -3602,6 +3766,14 @@
 
   function sortStudents(list, sortKey) {
     const next = Array.isArray(list) ? [...list] : [];
+    if (sortKey === "name-asc") {
+      next.sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ko"));
+      return next;
+    }
+    if (sortKey === "name-desc") {
+      next.sort((a, b) => String(b.name || "").localeCompare(String(a.name || ""), "ko"));
+      return next;
+    }
     if (sortKey === "session-price-desc") {
       next.sort(
         (a, b) =>
@@ -3756,6 +3928,32 @@
       });
     }
 
+    document.querySelectorAll(".student-stat-card[data-dashboard-filter]").forEach((card) => {
+      const applyFilter = () => {
+        const next = String(card.dataset.dashboardFilter || "").trim();
+        if (!next) return;
+        state.studentDashboardFilter = state.studentDashboardFilter === next ? null : next;
+        render();
+      };
+      card.addEventListener("click", applyFilter);
+      card.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          applyFilter();
+        }
+      });
+    });
+
+    const clearDashboardFilterBtn = document.getElementById("btn-clear-dashboard-filter");
+    if (clearDashboardFilterBtn) {
+      clearDashboardFilterBtn.addEventListener("click", () => {
+        state.studentDashboardFilter = null;
+        render();
+      });
+    }
+
+    wireTemporalInputAutoFormat(document);
+
     const searchInput = document.getElementById("search-input");
     if (searchInput) {
       searchInput.addEventListener("input", (e) => {
@@ -3825,7 +4023,8 @@
         const studentId = formEl.dataset.studentId;
         const addedSessions = Number(formEl.elements.addedSessions?.value || 0);
         const receivedAmount = Number(formEl.elements.receivedAmount?.value || 0);
-        const renewalDate = String(formEl.elements.renewalDate?.value || "").trim() || todayISO();
+        const renewalDate =
+          normalizeDateInputValue(String(formEl.elements.renewalDate?.value || "").trim()) || todayISO();
         const note = String(formEl.elements.note?.value || "").trim();
         const renewalEntryId = String(formEl.elements.renewalEntryId?.value || "").trim();
         if (renewalEntryId) {
@@ -3911,9 +4110,15 @@
         const startTimeInput = sessionItem.querySelector(".session-start-time");
         const endTimeInput = sessionItem.querySelector(".session-end-time");
         saveStudentSessionRecord(input.dataset.studentId, Number(input.dataset.sessionNumber), {
-          sessionDate: dateInput ? String(dateInput.value || "").trim() : "",
-          startTime: startTimeInput ? String(startTimeInput.value || "").trim() : "",
-          endTime: endTimeInput ? String(endTimeInput.value || "").trim() : "",
+          sessionDate: dateInput
+            ? normalizeDateInputValue(String(dateInput.value || "").trim())
+            : "",
+          startTime: startTimeInput
+            ? normalizeTimeInputValue(String(startTimeInput.value || "").trim())
+            : "",
+          endTime: endTimeInput
+            ? normalizeTimeInputValue(String(endTimeInput.value || "").trim())
+            : "",
         });
       });
     });
@@ -3947,10 +4152,22 @@
           showToast("학생 정보를 찾을 수 없습니다.");
           return;
         }
-        const slot = getStudentSessionSlots(student).find(
-          (item) => item.sessionNumber === Number(btn.dataset.sessionNumber)
+        const paymentGroups = getStudentPaymentGroups(student);
+        const selectedPaymentGroupId = getSelectedPaymentGroupId(student, paymentGroups);
+        const currentPaymentGroup =
+          paymentGroups.find((group) => group.id === selectedPaymentGroupId) || paymentGroups[0] || null;
+        const visibleSessionSlots = currentPaymentGroup
+          ? currentPaymentGroup.slots
+          : getStudentSessionSlots(student);
+        const notifySelection = getSessionNotifySelection(student.id);
+        const notifySlots = visibleSessionSlots.filter((item) =>
+          notifySelection.includes(item.sessionNumber)
         );
-        const message = buildSessionNotificationMessage(student, slot);
+        const activeSessionNumber = state.expandedSessionPanelByStudent[student.id] || null;
+        const activeSlot =
+          visibleSessionSlots.find((item) => item.sessionNumber === activeSessionNumber) || null;
+        const messageSlots = notifySlots.length > 0 ? notifySlots : activeSlot ? [activeSlot] : [];
+        const message = buildSessionNotificationMessage(student, messageSlots);
         if (!message) {
           showToast("예정일과 시작/종료 시간을 먼저 입력해 주세요.");
           return;
@@ -3979,6 +4196,7 @@
       state.expandedRowIds.delete(id);
       delete state.selectedPaymentGroupByStudent[id];
       delete state.expandedSessionPanelByStudent[id];
+      delete state.sessionNotifySelectionByStudent[id];
       delete state.editingRenewalEntryByStudent[id];
     } else {
       state.expandedRowIds.add(id);
@@ -4022,6 +4240,7 @@
     modal.classList.remove("hidden");
     modal.classList.add("modal-open");
     document.body.style.overflow = "hidden";
+    wireTemporalInputAutoFormat(form);
     setTimeout(() => {
       const focusable = form.querySelector("input[name='name']");
       if (focusable) focusable.focus();
@@ -4761,6 +4980,7 @@
           </div>`;
       })
       .join("");
+    wireTemporalInputAutoFormat(rowsContainer);
   }
 
   // 요일·유동 칩을 학생 모달 폼 안에 초기화합니다 (한 번만).
