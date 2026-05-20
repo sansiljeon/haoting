@@ -43,6 +43,12 @@
     { value: "session-price-desc", label: "수업 1회당 비용 높은순" },
     { value: "session-price-asc", label: "수업 1회당 비용 낮은순" },
   ];
+  const COUNSELING_SORT_OPTIONS = [
+    { value: "default", label: "상담일 최신순" },
+    { value: "name-asc", label: "이름 가나다순" },
+    { value: "name-desc", label: "이름 역순" },
+  ];
+  const COUNSELING_CLASS_FORMAT_OPTIONS = ["1:1", "소규모", "온라인", "방문"];
   const SCHEDULE_FLEXIBLE_DAY = "유동";
   const SESSION_NOTIFICATION_TEMPLATE = `[이름]님, 안녕하세요!
 예정된 수업 안내드립니다.
@@ -127,6 +133,9 @@
     isCounselingLoading: true,
     /** 상담기록 목록 필터 */
     counselingStatusFilter: "all", // "all" | "registered" | "unregistered"
+    counselingKeyword: "",
+    counselingSort: "default",
+    counselingMonthFilter: "", // "" | "YYYY-MM"
     /** 상단 작성/수정 폼 (수강생 상담 기록지 필드) */
     counselingDraft: emptyCounselingDraft(),
     studentTabs: [],
@@ -167,6 +176,7 @@
   let counselingFormSubmitting = false;
   let refundPdfLibraryPromise = null;
   let studentSearchComposing = false;
+  let counselingSearchComposing = false;
 
   /* ==========================================================
    * 2. 더미 데이터
@@ -1031,7 +1041,7 @@
       recordName: String(r.recordName || "").trim(),
       recordContact: normalizeKoreanMobileContact(String(r.recordContact || "").trim()),
       recordRegion: String(r.recordRegion || "").trim(),
-      classFormat: String(r.classFormat || "").trim(),
+      classFormat: formatClassFormats(parseClassFormats(r.classFormat)),
       didRegister: !!r.didRegister,
       chBanner: !!r.chBanner,
       chInternet: !!r.chInternet,
@@ -1092,6 +1102,116 @@
       availableTimes: n.availableTimes,
       specialNotes: n.specialNotes,
     });
+  }
+
+  function parseClassFormats(raw) {
+    if (Array.isArray(raw)) {
+      return raw.map((item) => String(item || "").trim()).filter(Boolean);
+    }
+    const str = String(raw || "").trim();
+    if (!str) return [];
+    return str
+      .split(/[·,/|]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  function formatClassFormats(values) {
+    const list = Array.isArray(values) ? values.map((item) => String(item || "").trim()).filter(Boolean) : parseClassFormats(values);
+    const ordered = COUNSELING_CLASS_FORMAT_OPTIONS.filter((item) => list.includes(item));
+    const extras = list.filter((item) => !COUNSELING_CLASS_FORMAT_OPTIONS.includes(item));
+    return [...ordered, ...extras].join(" · ");
+  }
+
+  function getCounselingRecordDisplayName(record) {
+    const n = normalizeCounselingRecord(record);
+    const linkedStudent = findStudentByContact(n.recordContact);
+    return (
+      n.recordName ||
+      (linkedStudent && linkedStudent.name) ||
+      getStudentNameById(n.studentId) ||
+      ""
+    );
+  }
+
+  function filterCounselingRecords(records, options) {
+    const exceptGender = !!(options && options.exceptGender);
+    let list = Array.isArray(records) ? records.slice() : [];
+    if (state.counselingStatusFilter === "registered") {
+      list = list.filter((record) => isCounselingRegistered(record));
+    } else if (state.counselingStatusFilter === "unregistered") {
+      list = list.filter((record) => !isCounselingRegistered(record));
+    }
+    if (!exceptGender && state.counselingGenderFilter && state.counselingGenderFilter !== "all") {
+      list = list.filter(
+        (record) => getCounselingRecordGender(record) === state.counselingGenderFilter
+      );
+    }
+    if (state.counselingMonthFilter) {
+      const monthKey = String(state.counselingMonthFilter).trim();
+      list = list.filter((record) => {
+        const date = normalizeCounselingRecord(record).counselingDate;
+        return date && date.startsWith(monthKey);
+      });
+    }
+    const kw = (state.counselingKeyword || "").trim().toLowerCase();
+    if (kw) {
+      list = list.filter((record) => {
+        const n = normalizeCounselingRecord(record);
+        const linkedStudent = findStudentByContact(n.recordContact);
+        return [
+          getCounselingRecordDisplayName(record),
+          n.recordContact,
+          n.recordRegion,
+          n.counselorName,
+          n.assignedInstructor,
+          n.classFormat,
+          n.enrollmentPurpose,
+          n.specialNotes,
+          linkedStudent && linkedStudent.name,
+        ]
+          .map((value) => String(value || "").toLowerCase())
+          .some((value) => value.includes(kw));
+      });
+    }
+    return list;
+  }
+
+  function sortCounselingRecords(list, sortKey) {
+    const next = Array.isArray(list) ? [...list] : [];
+    if (sortKey === "name-asc") {
+      next.sort(
+        (a, b) =>
+          getCounselingRecordDisplayName(a).localeCompare(getCounselingRecordDisplayName(b), "ko") ||
+          String(normalizeCounselingRecord(b).counselingDate || "").localeCompare(
+            String(normalizeCounselingRecord(a).counselingDate || "")
+          )
+      );
+      return next;
+    }
+    if (sortKey === "name-desc") {
+      next.sort(
+        (a, b) =>
+          getCounselingRecordDisplayName(b).localeCompare(getCounselingRecordDisplayName(a), "ko") ||
+          String(normalizeCounselingRecord(b).counselingDate || "").localeCompare(
+            String(normalizeCounselingRecord(a).counselingDate || "")
+          )
+      );
+      return next;
+    }
+    next.sort((a, b) =>
+      String(normalizeCounselingRecord(b).counselingDate || "").localeCompare(
+        String(normalizeCounselingRecord(a).counselingDate || "")
+      )
+    );
+    return next;
+  }
+
+  function formatCounselingMonthLabel(monthKey) {
+    const trimmed = String(monthKey || "").trim();
+    if (!trimmed || !/^\d{4}-\d{2}$/.test(trimmed)) return "전체 기간";
+    const [year, month] = trimmed.split("-");
+    return `${year}년 ${Number(month)}월`;
   }
 
   function getCounselingListPreview(rec) {
@@ -1815,19 +1935,19 @@
     const draftDate = d.date || todayISO();
     const isEditing = !!d.id;
 
-    let listRecords = state.counselingRecords.slice();
-    if (state.counselingStatusFilter === "registered") {
-      listRecords = listRecords.filter((record) => isCounselingRegistered(record));
-    } else if (state.counselingStatusFilter === "unregistered") {
-      listRecords = listRecords.filter((record) => !isCounselingRegistered(record));
-    }
-    if (state.counselingGenderFilter && state.counselingGenderFilter !== "all") {
-      listRecords = listRecords.filter(
-        (record) => getCounselingRecordGender(record) === state.counselingGenderFilter
-      );
-    }
-
-    const fmt = (v) => (d.classFormat === v ? " checked" : "");
+    const listRecords = sortCounselingRecords(
+      filterCounselingRecords(state.counselingRecords),
+      state.counselingSort
+    );
+    const counselingSortOptionsHtml = COUNSELING_SORT_OPTIONS.map(
+      (option) => `
+        <option value="${option.value}"${state.counselingSort === option.value ? " selected" : ""}>
+          ${option.label}
+        </option>
+      `
+    ).join("");
+    const selectedClassFormats = parseClassFormats(d.classFormat);
+    const fmtClass = (v) => (selectedClassFormats.includes(v) ? " checked" : "");
     const ichk = (flag) => (d[flag] ? " checked" : "");
     const stats = getCounselingStats(state.counselingRecords);
     const statusOptionsHtml = [
@@ -1856,7 +1976,7 @@
               .map((r) => {
                 const n = normalizeCounselingRecord(r);
                 const linkedStudent = findStudentByContact(n.recordContact);
-                const name = n.recordName || (linkedStudent && linkedStudent.name) || getStudentNameById(r.studentId);
+                const name = getCounselingRecordDisplayName(r);
                 const nameCell = name
                   ? escapeHtml(name)
                   : `<span class="text-amber-600">${escapeHtml(r.studentId || "-")}</span>
@@ -2008,11 +2128,16 @@
                 </div>
                 <div class="counseling-field counseling-field-span2">
                   <span class="counseling-cell-label">희망 수업 방식<span class="req">*</span></span>
-                  <div class="counseling-radio-row">
-                    <label class="counseling-inline"><input type="radio" name="classFormat" value="1:1"${fmt("1:1")} /> 1:1</label>
-                    <label class="counseling-inline"><input type="radio" name="classFormat" value="소규모"${fmt("소규모")} /> 소규모</label>
-                    <label class="counseling-inline"><input type="radio" name="classFormat" value="온라인"${fmt("온라인")} /> 온라인</label>
-                    <label class="counseling-inline"><input type="radio" name="classFormat" value="방문"${fmt("방문")} /> 방문</label>
+                  <p class="mb-1 text-[11px] text-slate-500">복수 선택 가능합니다.</p>
+                  <div class="counseling-ch-row counseling-ch-row-wrap">
+                    ${COUNSELING_CLASS_FORMAT_OPTIONS.map(
+                      (option) => `
+                        <label class="counseling-inline">
+                          <input type="checkbox" name="classFormat" value="${escapeHtml(option)}"${fmtClass(option)} />
+                          ${escapeHtml(option)}
+                        </label>
+                      `
+                    ).join("")}
                   </div>
                 </div>
                 <div class="counseling-field counseling-field-span2">
@@ -2116,24 +2241,79 @@
       ${renderGenderFilterBar({
         filterKey: "counseling-gender-filter",
         activeValue: state.counselingGenderFilter,
-        countFn: (key) => {
-          let base = state.counselingRecords.slice();
-          if (state.counselingStatusFilter === "registered") {
-            base = base.filter((record) => isCounselingRegistered(record));
-          } else if (state.counselingStatusFilter === "unregistered") {
-            base = base.filter((record) => !isCounselingRegistered(record));
-          }
-          return countCounselingByGender(base, key);
-        },
+        countFn: (key) =>
+          countCounselingByGender(
+            filterCounselingRecords(state.counselingRecords, { exceptGender: true }),
+            key
+          ),
         title: "성별",
         description: "",
         buttonClass: "counseling-gender-filter-btn",
       })}
 
+      <section class="mb-4 rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm md:px-6">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <div class="min-w-0 flex-1">
+            <label class="sr-only" for="counseling-search-input">이름 검색</label>
+            <div class="relative">
+              <i class="fa-solid fa-magnifying-glass pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
+              <input
+                id="counseling-search-input"
+                type="search"
+                value="${escapeHtml(state.counselingKeyword)}"
+                placeholder="이름·연락처·상담자·지역 검색"
+                class="form-input w-full pl-9"
+              />
+            </div>
+          </div>
+          <div class="flex w-full flex-col gap-3 sm:flex-row sm:items-center lg:w-auto">
+            <div class="w-full sm:w-44">
+              <label class="sr-only" for="counseling-sort-select">정렬</label>
+              <select id="counseling-sort-select" class="form-input w-full text-sm">
+                ${counselingSortOptionsHtml}
+              </select>
+            </div>
+            <div class="w-full sm:w-44">
+              <label class="sr-only" for="counseling-month-filter">월별 보기</label>
+              <input
+                id="counseling-month-filter"
+                type="month"
+                class="form-input w-full text-sm"
+                value="${escapeHtml(state.counselingMonthFilter)}"
+              />
+            </div>
+            ${
+              state.counselingMonthFilter
+                ? `<button
+                    type="button"
+                    id="btn-clear-counseling-month"
+                    class="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                  >
+                    <i class="fa-solid fa-xmark"></i>
+                    전체 기간
+                  </button>`
+                : ""
+            }
+          </div>
+        </div>
+        ${
+          state.counselingMonthFilter
+            ? `<p class="mt-3 text-xs text-brand-700">
+                <strong>${escapeHtml(formatCounselingMonthLabel(state.counselingMonthFilter))}</strong> 상담 기록만 표시 중
+              </p>`
+            : ""
+        }
+      </section>
+
       <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <div class="border-b border-slate-200 px-4 py-4 md:px-6">
           <h3 class="text-base font-semibold text-slate-900">상담 기록 목록</h3>
-          <p class="mt-0.5 text-xs text-slate-500">최신 상담일 순 · ${formatNumber(listRecords.length)}건 표시</p>
+          <p class="mt-0.5 text-xs text-slate-500">
+            ${escapeHtml(
+              COUNSELING_SORT_OPTIONS.find((item) => item.value === state.counselingSort)?.label ||
+                "상담일 최신순"
+            )} · ${formatNumber(listRecords.length)}건 표시
+          </p>
         </div>
         <div class="overflow-x-auto">
           <table class="min-w-full divide-y divide-slate-200 text-sm">
@@ -2170,6 +2350,55 @@
         render();
       });
     });
+
+    const counselingSearchInput = document.getElementById("counseling-search-input");
+    if (counselingSearchInput) {
+      counselingSearchInput.addEventListener("compositionstart", () => {
+        counselingSearchComposing = true;
+      });
+      counselingSearchInput.addEventListener("compositionend", (e) => {
+        counselingSearchComposing = false;
+        state.counselingKeyword = e.target.value;
+        render();
+      });
+      counselingSearchInput.addEventListener("input", (e) => {
+        state.counselingKeyword = e.target.value;
+        if (counselingSearchComposing) return;
+        const cursorPos = e.target.selectionStart;
+        render();
+        const next = document.getElementById("counseling-search-input");
+        if (next) {
+          next.focus();
+          try {
+            next.setSelectionRange(cursorPos, cursorPos);
+          } catch (_) {}
+        }
+      });
+    }
+
+    const counselingSortSelect = document.getElementById("counseling-sort-select");
+    if (counselingSortSelect) {
+      counselingSortSelect.addEventListener("change", () => {
+        state.counselingSort = String(counselingSortSelect.value || "default");
+        render();
+      });
+    }
+
+    const counselingMonthFilter = document.getElementById("counseling-month-filter");
+    if (counselingMonthFilter) {
+      counselingMonthFilter.addEventListener("change", () => {
+        state.counselingMonthFilter = String(counselingMonthFilter.value || "").trim();
+        render();
+      });
+    }
+
+    const clearCounselingMonthBtn = document.getElementById("btn-clear-counseling-month");
+    if (clearCounselingMonthBtn) {
+      clearCounselingMonthBtn.addEventListener("click", () => {
+        state.counselingMonthFilter = "";
+        render();
+      });
+    }
 
     const contactInput = document.getElementById("cf-record-contact");
     if (contactInput) {
@@ -2252,20 +2481,11 @@
   function collectCounselingFieldsFromForm(form) {
     const val = (name) => String(form.elements[name]?.value ?? "").trim();
     const chk = (name) => !!form.elements[name]?.checked;
-    const rf = form.elements.classFormat;
-    let classFormat = "";
-    if (rf) {
-      if (typeof rf.length === "number" && rf.length > 0) {
-        for (let i = 0; i < rf.length; i++) {
-          if (rf[i].checked) {
-            classFormat = rf[i].value;
-            break;
-          }
-        }
-      } else if (rf.checked) {
-        classFormat = rf.value;
-      }
-    }
+    const classFormat = formatClassFormats(
+      Array.from(form.querySelectorAll('input[name="classFormat"]:checked')).map((input) =>
+        String(input.value || "").trim()
+      )
+    );
     return {
       counselorName: val("counselorName"),
       assignedInstructor: val("assignedInstructor"),
@@ -2310,17 +2530,11 @@
     const recordName = String(form.elements.recordName?.value || "").trim();
     const recordContact = String(form.elements.recordContact?.value || "").trim();
     const recordRegion = String(form.elements.recordRegion?.value || "").trim();
-    const classFormat = (() => {
-      const rf = form.elements.classFormat;
-      if (!rf) return "";
-      if (typeof rf.length === "number" && rf.length > 0) {
-        for (let i = 0; i < rf.length; i++) {
-          if (rf[i].checked) return String(rf[i].value || "").trim();
-        }
-        return "";
-      }
-      return rf.checked ? String(rf.value || "").trim() : "";
-    })();
+    const classFormat = formatClassFormats(
+      Array.from(form.querySelectorAll('input[name="classFormat"]:checked')).map((input) =>
+        String(input.value || "").trim()
+      )
+    );
 
     const missingLabels = [];
     if (!counselorName) missingLabels.push("상담자");
@@ -2341,8 +2555,8 @@
       } else if (!recordContact) {
         form.elements.recordContact?.focus();
       } else if (!classFormat) {
-        const firstRadio = form.querySelector('input[name="classFormat"]');
-        firstRadio?.focus();
+        const firstCheckbox = form.querySelector('input[name="classFormat"]');
+        firstCheckbox?.focus();
       } else if (!recordRegion) {
         form.elements.recordRegion?.focus();
       }
@@ -5736,6 +5950,10 @@
     state.studentSort = "default";
     state.salesFilter = "all";
     state.counselingStatusFilter = "all";
+    state.counselingKeyword = "";
+    state.counselingSort = "default";
+    state.counselingMonthFilter = "";
+    state.counselingGenderFilter = "all";
     state.counselingDraft = emptyCounselingDraft();
     state.selectedPaymentGroupByStudent = {};
     state.refundStudentId = null;
