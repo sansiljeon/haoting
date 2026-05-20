@@ -90,6 +90,8 @@
       studentId: "",
       date: "",
       counselorName: "",
+      assignedInstructor: "",
+      recordGender: "",
       recordName: "",
       recordContact: "",
       recordRegion: "",
@@ -133,6 +135,9 @@
     filter: "all", // "all" | "active"
     keyword: "",
     courseTrackFilter: "all", // "all" | "basic" | "conversation" | "certification"
+    instructorFilter: "all", // "all" | instructor name
+    studentGenderFilter: "all", // "all" | "male" | "female"
+    counselingGenderFilter: "all", // "all" | "male" | "female"
     studentSort: "default",
     studentDashboardFilter: null, // null | "today-class" | "renewal-due"
     sessionNotifySelectionByStudent: {}, // 학생별 안내 문자에 포함할 전체 회차 번호
@@ -161,6 +166,7 @@
   let studentFormSubmitting = false;
   let counselingFormSubmitting = false;
   let refundPdfLibraryPromise = null;
+  let studentSearchComposing = false;
 
   /* ==========================================================
    * 2. 더미 데이터
@@ -328,6 +334,8 @@
       eventPrice: toAmount(raw.eventPrice),
       perSessionPrice: toAmount(raw.perSessionPrice),
       refundAmount: toAmount(raw.refundAmount),
+      cardCancelAmount: toAmount(raw.cardCancelAmount),
+      repaymentAmount: toAmount(raw.repaymentAmount),
       bankName: String(raw.bankName || "").trim(),
       accountNumber: String(raw.accountNumber || "").trim(),
       accountHolder: String(raw.accountHolder || "").trim(),
@@ -361,12 +369,40 @@
     return Array.from(map.values()).sort((a, b) => a.sessionNumber - b.sessionNumber);
   }
 
+  function normalizeGender(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    if (raw === "male" || raw === "m" || raw === "남" || raw === "남자") return "male";
+    if (raw === "female" || raw === "f" || raw === "여" || raw === "여자") return "female";
+    return "";
+  }
+
+  function formatGenderLabel(value) {
+    if (value === "male") return "남";
+    if (value === "female") return "여";
+    return "-";
+  }
+
+  function setGenderOnForm(form, gender) {
+    if (!form) return;
+    const value = normalizeGender(gender);
+    form.querySelectorAll('input[name="gender"]').forEach((radio) => {
+      radio.checked = value ? radio.value === value : false;
+    });
+  }
+
+  function readGenderFromForm(form) {
+    if (!form) return "";
+    const checked = form.querySelector('input[name="gender"]:checked');
+    return checked ? normalizeGender(checked.value) : "";
+  }
+
   function normalizeStudent(s) {
     if (!s || typeof s !== "object") return s;
     const tuitionFee = sanitizeNonNegativeAmount(s.tuitionFee, 0);
     const receivedAmountTotal = sanitizeNonNegativeAmount(s.receivedAmountTotal, tuitionFee);
     return Object.assign({}, s, {
       birthDate: String(s.birthDate || "").trim(),
+      gender: normalizeGender(s.gender),
       tuitionFee,
       receivedAmountTotal,
       scheduleDays: Array.isArray(s.scheduleDays) ? s.scheduleDays : [],
@@ -989,7 +1025,9 @@
     return Object.assign({}, r, {
       studentId: String(r.studentId || "").trim(),
       counselingDate: String(r.counselingDate || "").trim(),
-      counselorName: String(r.counselorName || r.assignedInstructor || "").trim(),
+      counselorName: String(r.counselorName || "").trim(),
+      assignedInstructor: String(r.assignedInstructor || "").trim(),
+      recordGender: normalizeGender(r.recordGender),
       recordName: String(r.recordName || "").trim(),
       recordContact: normalizeKoreanMobileContact(String(r.recordContact || "").trim()),
       recordRegion: String(r.recordRegion || "").trim(),
@@ -1027,6 +1065,8 @@
       studentId: n.studentId,
       date: n.counselingDate || todayISO(),
       counselorName: n.counselorName,
+      assignedInstructor: n.assignedInstructor,
+      recordGender: n.recordGender,
       recordName: n.recordName,
       recordContact: n.recordContact,
       recordRegion: n.recordRegion,
@@ -1121,6 +1161,23 @@
     return items.length > 0 ? items.join(" · ") : "-";
   }
 
+  function renderInstructorSelectOptions(value, placeholder) {
+    const current = String(value || "").trim();
+    const emptyLabel = placeholder || "배정 강사 선택 (선택)";
+    const options = [`<option value="">${escapeHtml(emptyLabel)}</option>`];
+    INSTRUCTORS.forEach((name) => {
+      options.push(
+        `<option value="${escapeHtml(name)}"${current === name ? " selected" : ""}>${escapeHtml(name)}</option>`
+      );
+    });
+    if (current && !INSTRUCTORS.includes(current)) {
+      options.push(
+        `<option value="${escapeHtml(current)}" selected>${escapeHtml(current)} (기존)</option>`
+      );
+    }
+    return options.join("");
+  }
+
   function renderCounselorSelectOptions(value) {
     const current = String(value || "").trim();
     const options = ['<option value="" disabled>상담자를 선택하세요</option>'];
@@ -1159,6 +1216,8 @@
           { label: "상담 요청 경로", value: formatCounselingRequestChannels(n), fullWidth: true, multiline: true },
           { label: "등록 여부", value: isCounselingRegistered(n) ? "등록 완료" : "미등록" },
           { label: "상담자", value: n.counselorName || "-" },
+          { label: "배정 강사", value: n.assignedInstructor || "-" },
+          { label: "성별", value: formatGenderLabel(getCounselingRecordGender(n)) },
           { label: "연계 학생", value: linkedStudent ? linkedStudent.name : "-" },
           { label: "학생 상태", value: linkedStudent ? getStudentStatusLabel(linkedStudent) : "-" },
         ],
@@ -1197,6 +1256,16 @@
             ${escapeHtml(isCounselingRegistered(n) ? "등록 완료" : "미등록")}
           </span>
           <span class="student-detail-chip">${escapeHtml(`상담자 ${n.counselorName || "-"}`)}</span>
+          ${
+            n.assignedInstructor
+              ? `<span class="student-detail-chip">${escapeHtml(`배정 ${n.assignedInstructor}`)}</span>`
+              : ""
+          }
+          ${
+            getCounselingRecordGender(n)
+              ? `<span class="student-detail-chip">${escapeHtml(formatGenderLabel(getCounselingRecordGender(n)))}</span>`
+              : ""
+          }
           ${
             linkedStudent
               ? `<span class="student-detail-chip">${escapeHtml(`연계 학생 ${linkedStudent.name}`)}</span>`
@@ -1301,10 +1370,17 @@
     form.elements.region.value = n.recordRegion || "";
     form.elements.inflowChannel.value = formatCounselingRequestChannels(n) === "-" ? "" : formatCounselingRequestChannels(n);
     form.elements.notes.value = buildStudentNotesFromCounseling(n);
-    if (INSTRUCTORS.includes(n.counselorName)) {
-      ensureInstructorOption(form, n.counselorName);
-      form.elements.assignedInstructor.value = n.counselorName;
+    const instructorToAssign =
+      INSTRUCTORS.includes(n.assignedInstructor)
+        ? n.assignedInstructor
+        : INSTRUCTORS.includes(n.counselorName)
+          ? n.counselorName
+          : "";
+    if (instructorToAssign) {
+      ensureInstructorOption(form, instructorToAssign);
+      form.elements.assignedInstructor.value = instructorToAssign;
     }
+    setGenderOnForm(form, n.recordGender);
     if (subtitleEl) {
       subtitleEl.textContent = `${n.recordName || "상담 기록"} 상담 내용을 바탕으로 학생 정보를 미리 채웠습니다. 확인 후 저장해 주세요.`;
     }
@@ -1745,6 +1821,11 @@
     } else if (state.counselingStatusFilter === "unregistered") {
       listRecords = listRecords.filter((record) => !isCounselingRegistered(record));
     }
+    if (state.counselingGenderFilter && state.counselingGenderFilter !== "all") {
+      listRecords = listRecords.filter(
+        (record) => getCounselingRecordGender(record) === state.counselingGenderFilter
+      );
+    }
 
     const fmt = (v) => (d.classFormat === v ? " checked" : "");
     const ichk = (flag) => (d[flag] ? " checked" : "");
@@ -1865,6 +1946,15 @@
                     ${renderCounselorSelectOptions(d.counselorName)}
                   </select>
                 </p>
+                <p class="counseling-sheet-instructor-line mt-1">
+                  <span class="counseling-sheet-instructor-label">배정 강사</span>
+                  <select
+                    name="assignedInstructor"
+                    class="counseling-sheet-instructor-input"
+                  >
+                    ${renderInstructorSelectOptions(d.assignedInstructor)}
+                  </select>
+                </p>
               </div>
               <div class="counseling-sheet-header-center">
                 <h3 class="counseling-sheet-title">수강생 상담 기록지</h3>
@@ -1902,6 +1992,13 @@
                 <div class="counseling-field">
                   <label class="counseling-cell-label" for="cf-record-name">이름<span class="req">*</span></label>
                   <input id="cf-record-name" name="recordName" type="text" class="form-input" value="${escapeHtml(d.recordName)}" />
+                </div>
+                <div class="counseling-field">
+                  <span class="counseling-cell-label">성별</span>
+                  <div class="counseling-radio-row">
+                    <label class="counseling-inline"><input type="radio" name="recordGender" value="male"${d.recordGender === "male" ? " checked" : ""} /> 남</label>
+                    <label class="counseling-inline"><input type="radio" name="recordGender" value="female"${d.recordGender === "female" ? " checked" : ""} /> 여</label>
+                  </div>
                 </div>
                 <div class="counseling-field">
                   <label class="counseling-cell-label" for="cf-record-contact">연락처<span class="req">*</span></label>
@@ -2016,6 +2113,23 @@
         </form>
       </section>
 
+      ${renderGenderFilterBar({
+        filterKey: "counseling-gender-filter",
+        activeValue: state.counselingGenderFilter,
+        countFn: (key) => {
+          let base = state.counselingRecords.slice();
+          if (state.counselingStatusFilter === "registered") {
+            base = base.filter((record) => isCounselingRegistered(record));
+          } else if (state.counselingStatusFilter === "unregistered") {
+            base = base.filter((record) => !isCounselingRegistered(record));
+          }
+          return countCounselingByGender(base, key);
+        },
+        title: "성별",
+        description: "",
+        buttonClass: "counseling-gender-filter-btn",
+      })}
+
       <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <div class="border-b border-slate-200 px-4 py-4 md:px-6">
           <h3 class="text-base font-semibold text-slate-900">상담 기록 목록</h3>
@@ -2049,6 +2163,13 @@
         render();
       });
     }
+
+    document.querySelectorAll(".counseling-gender-filter-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.counselingGenderFilter = String(btn.dataset.counselingGenderFilter || "all");
+        render();
+      });
+    });
 
     const contactInput = document.getElementById("cf-record-contact");
     if (contactInput) {
@@ -2147,6 +2268,8 @@
     }
     return {
       counselorName: val("counselorName"),
+      assignedInstructor: val("assignedInstructor"),
+      recordGender: normalizeGender(val("recordGender")),
       recordName: val("recordName"),
       recordContact: normalizeKoreanMobileContact(val("recordContact")),
       recordRegion: val("recordRegion"),
@@ -2332,6 +2455,8 @@
       state.filter,
       state.keyword,
       state.selectedStudentTabId,
+      "all",
+      "all",
       "all"
     );
     const filteredStudents = filterStudentsByDashboard(
@@ -2340,7 +2465,9 @@
         state.filter,
         state.keyword,
         state.selectedStudentTabId,
-        state.courseTrackFilter
+        state.courseTrackFilter,
+        state.instructorFilter,
+        state.studentGenderFilter
       ),
       state.studentDashboardFilter
     );
@@ -2434,9 +2561,20 @@
           .join("")}
       </section>
 
-      ${renderStudentTabsBar()}
+      ${renderStudentInstructorFilterBar(baseFilteredStudents)}
+
+      ${renderGenderFilterBar({
+        filterKey: "student-gender-filter",
+        activeValue: state.studentGenderFilter,
+        countFn: (key) => countStudentsByGender(baseFilteredStudents, key),
+        title: "성별",
+        description: "",
+        buttonClass: "student-gender-filter-btn",
+      })}
 
       ${renderStudentTrackFilterBar(baseFilteredStudents)}
+
+      ${renderStudentTabsBar()}
 
       <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <div class="flex flex-col gap-3 border-b border-slate-200 px-4 py-4 md:flex-row md:items-center md:justify-between md:px-6">
@@ -2518,6 +2656,126 @@
     return (Array.isArray(students) ? students : []).filter(
       (student) => getCurriculumTrack(student.curriculum) === trackKey
     ).length;
+  }
+
+  function countStudentsByInstructor(students, instructorKey) {
+    if (instructorKey === "all") return Array.isArray(students) ? students.length : 0;
+    return (Array.isArray(students) ? students : []).filter(
+      (student) => String(student.assignedInstructor || "").trim() === instructorKey
+    ).length;
+  }
+
+  function countStudentsByGender(students, genderKey) {
+    if (genderKey === "all") return Array.isArray(students) ? students.length : 0;
+    return (Array.isArray(students) ? students : []).filter(
+      (student) => normalizeGender(student.gender) === genderKey
+    ).length;
+  }
+
+  function renderStudentInstructorFilterBar(students) {
+    const options = [{ key: "all", label: "전체" }, ...INSTRUCTORS.map((name) => ({ key: name, label: name }))];
+    return `
+      <section class="mb-4 rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm md:px-6">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p class="text-sm font-semibold text-slate-900">담당 강사</p>
+            <p class="mt-1 text-xs text-slate-500">박환희·김정화 선생님별로 학생 목록을 나눠 볼 수 있습니다.</p>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            ${options
+              .map((item) => {
+                const isActive = state.instructorFilter === item.key;
+                return `
+                  <button
+                    type="button"
+                    class="student-instructor-filter-btn inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium transition ${
+                      isActive
+                        ? "border-brand-500 bg-brand-50 text-brand-700"
+                        : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                    }"
+                    data-instructor-filter="${escapeHtml(item.key)}"
+                  >
+                    <span>${escapeHtml(item.label)}</span>
+                    <span class="inline-flex min-w-[1.5rem] items-center justify-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">
+                      ${formatNumber(countStudentsByInstructor(students, item.key))}
+                    </span>
+                  </button>
+                `;
+              })
+              .join("")}
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderGenderFilterBar(options) {
+    const { filterKey, activeValue, countFn, title, description, buttonClass } = options;
+    const items = [
+      { key: "all", label: "전체" },
+      { key: "male", label: "남" },
+      { key: "female", label: "여" },
+    ];
+    return `
+      <section class="mb-4 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm md:px-6">
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div class="min-w-0">
+            <p class="text-sm font-semibold text-slate-900">${escapeHtml(title)}</p>
+            ${
+              description
+                ? `<p class="mt-0.5 text-xs text-slate-500">${escapeHtml(description)}</p>`
+                : ""
+            }
+          </div>
+          <div class="flex flex-wrap gap-2">
+            ${items
+              .map((item) => {
+                const isActive = activeValue === item.key;
+                return `
+                  <button
+                    type="button"
+                    class="${buttonClass} inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium transition ${
+                      isActive
+                        ? "border-brand-500 bg-brand-50 text-brand-700"
+                        : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                    }"
+                    data-${filterKey}="${item.key}"
+                  >
+                    <span>${item.label}</span>
+                    <span class="inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">
+                      ${formatNumber(countFn(item.key))}
+                    </span>
+                  </button>
+                `;
+              })
+              .join("")}
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  function getCounselingRecordGender(record) {
+    const n = normalizeCounselingRecord(record);
+    if (n.recordGender) return n.recordGender;
+    const linkedStudent = findStudentByContact(n.recordContact);
+    return linkedStudent ? normalizeGender(linkedStudent.gender) : "";
+  }
+
+  function countCounselingByGender(records, genderKey) {
+    const list = Array.isArray(records) ? records : [];
+    if (genderKey === "all") return list.length;
+    return list.filter((record) => getCounselingRecordGender(record) === genderKey).length;
+  }
+
+  function calculateRefundFromRegularPrice(regularPrice, totalSessions, completedCount) {
+    const regular = Math.max(0, Number(regularPrice) || 0);
+    const sessions = Math.max(0, Number(totalSessions) || 0);
+    const completed = Math.max(0, Number(completedCount) || 0);
+    if (sessions <= 0) return { perSessionPrice: 0, refundAmount: regular };
+    const perSessionPrice = Math.round(regular / sessions);
+    const refundAmount = Math.max(regular - perSessionPrice * completed, 0);
+    return { perSessionPrice, refundAmount };
   }
 
   function renderStudentTrackFilterBar(students) {
@@ -2833,8 +3091,8 @@
       <section class="mb-4 rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm md:px-6">
         <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div class="min-w-0">
-            <p class="text-sm font-semibold text-slate-900">학생 탭</p>
-            <p class="mt-1 text-xs text-slate-500">학생을 여러 탭으로 구분해 관리할 수 있습니다.</p>
+            <p class="text-sm font-semibold text-slate-900">추가 탭</p>
+            <p class="mt-1 text-xs text-slate-500">담당 강사 필터와 별도로, 반·그룹 등 자유 탭을 만들어 학생을 묶을 수 있습니다.</p>
           </div>
           <form id="student-tab-create-form" class="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
             <input
@@ -3797,13 +4055,19 @@
   /* ==========================================================
    * 6. 필터 / 검색
    * ========================================================== */
-  function applyFilters(list, filter, keyword, selectedTabId, courseTrackFilter) {
+  function applyFilters(list, filter, keyword, selectedTabId, courseTrackFilter, instructorFilter, genderFilter) {
     let next = list;
     if (filter === "active") {
       next = next.filter((s) => s.isActive);
     }
     if (selectedTabId && selectedTabId !== "all") {
       next = next.filter((s) => normalizeStringArray(s.studentTabIds).includes(selectedTabId));
+    }
+    if (instructorFilter && instructorFilter !== "all") {
+      next = next.filter((s) => String(s.assignedInstructor || "").trim() === instructorFilter);
+    }
+    if (genderFilter && genderFilter !== "all") {
+      next = next.filter((s) => normalizeGender(s.gender) === genderFilter);
     }
     if (courseTrackFilter && courseTrackFilter !== "all") {
       next = next.filter((s) => getCurriculumTrack(s.curriculum) === courseTrackFilter);
@@ -3913,6 +4177,20 @@
       });
     }
 
+    document.querySelectorAll(".student-instructor-filter-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.instructorFilter = String(btn.dataset.instructorFilter || "all");
+        render();
+      });
+    });
+
+    document.querySelectorAll(".student-gender-filter-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.studentGenderFilter = String(btn.dataset.studentGenderFilter || "all");
+        render();
+      });
+    });
+
     document.querySelectorAll(".student-track-filter-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         state.courseTrackFilter = String(btn.dataset.trackFilter || "all");
@@ -3956,9 +4234,17 @@
 
     const searchInput = document.getElementById("search-input");
     if (searchInput) {
+      searchInput.addEventListener("compositionstart", () => {
+        studentSearchComposing = true;
+      });
+      searchInput.addEventListener("compositionend", (e) => {
+        studentSearchComposing = false;
+        state.keyword = e.target.value;
+        render();
+      });
       searchInput.addEventListener("input", (e) => {
         state.keyword = e.target.value;
-        // 입력 중에는 입력 포커스가 사라지지 않도록 단순 재렌더 후 포커스 복원
+        if (studentSearchComposing) return;
         const cursorPos = e.target.selectionStart;
         render();
         const next = document.getElementById("search-input");
@@ -4366,14 +4652,13 @@
       targetGroup && sanitizeNonNegativeAmount(targetGroup.receivedAmount, 0) > 0
         ? sanitizeNonNegativeAmount(targetGroup.receivedAmount, 0)
         : defaultRegularPrice;
-    const defaultPerSessionPrice =
-      targetGroup && targetGroup.totalSessions > 0
-        ? Math.round(defaultEventPrice / targetGroup.totalSessions)
-        : 0;
-    const defaultRefundAmount = Math.max(
-      defaultEventPrice - defaultPerSessionPrice * (targetGroup ? targetGroup.completedCount : 0),
-      0
+    const refundCalc = calculateRefundFromRegularPrice(
+      defaultRegularPrice,
+      targetGroup ? targetGroup.totalSessions : 0,
+      targetGroup ? targetGroup.completedCount : 0
     );
+    const defaultPerSessionPrice = refundCalc.perSessionPrice;
+    const defaultRefundAmount = refundCalc.refundAmount;
     const defaultLessonDescription = targetGroup
       ? `${student.curriculum || "수업"} (${formatNumber(targetGroup.totalSessions)}회차)`
       : student.curriculum || "";
@@ -4389,6 +4674,8 @@
       eventPrice: useSeedForCalculatedFields ? seed.eventPrice : defaultEventPrice,
       perSessionPrice: useSeedForCalculatedFields ? seed.perSessionPrice : defaultPerSessionPrice,
       refundAmount: useSeedForCalculatedFields ? seed.refundAmount : defaultRefundAmount,
+      cardCancelAmount: useSeedForCalculatedFields ? seed.cardCancelAmount : 0,
+      repaymentAmount: useSeedForCalculatedFields ? seed.repaymentAmount : 0,
       bankName: seed ? seed.bankName : "",
       accountNumber: seed ? seed.accountNumber : "",
       accountHolder: seed ? seed.accountHolder : "",
@@ -4478,15 +4765,25 @@
                 <td>${escapeHtml(formatNumber(safeDraft.eventPrice || 0))}</td>
               </tr>
               <tr>
-                <th>회당 가격</th>
+                <th>회당 가격 (정가 기준)</th>
                 <td>${escapeHtml(formatNumber(safeDraft.perSessionPrice || 0))}</td>
-                <th>환불액</th>
+                <th>환불액 (정가 기준)</th>
                 <td>${escapeHtml(formatNumber(safeDraft.refundAmount || 0))}</td>
               </tr>
+              ${
+                safeDraft.cardCancelAmount > 0 || safeDraft.repaymentAmount > 0
+                  ? `<tr>
+                      <th>카드 취소</th>
+                      <td>${escapeHtml(formatNumber(safeDraft.cardCancelAmount || 0))}</td>
+                      <th>재결제</th>
+                      <td>${escapeHtml(formatNumber(safeDraft.repaymentAmount || 0))}</td>
+                    </tr>`
+                  : ""
+              }
             </tbody>
           </table>
           <div class="refund-sheet-note">
-            <p>환불 금액 산정 기준은 이벤트가가 아닌 정가로 계산됩니다. (환불규정 참조)</p>
+            <p>환불 금액은 정가 기준으로 산정됩니다. (이벤트가가 아닌 정가에서 수강 회차만큼 차감)</p>
             <p>환불 요청으로 인해 발생되는 모든 법적인 책임은 본인에게 있습니다.</p>
           </div>
         </section>
@@ -4547,6 +4844,8 @@
     form.elements.eventPrice.value = draft.eventPrice || 0;
     form.elements.perSessionPrice.value = draft.perSessionPrice || 0;
     form.elements.refundAmount.value = draft.refundAmount || 0;
+    if (form.elements.cardCancelAmount) form.elements.cardCancelAmount.value = draft.cardCancelAmount || 0;
+    if (form.elements.repaymentAmount) form.elements.repaymentAmount.value = draft.repaymentAmount || 0;
     form.elements.bankName.value = draft.bankName || "";
     form.elements.accountNumber.value = draft.accountNumber || "";
     form.elements.accountHolder.value = draft.accountHolder || "";
@@ -4613,6 +4912,8 @@
       eventPrice: form.elements.eventPrice?.value,
       perSessionPrice: form.elements.perSessionPrice?.value,
       refundAmount: form.elements.refundAmount?.value,
+      cardCancelAmount: form.elements.cardCancelAmount?.value,
+      repaymentAmount: form.elements.repaymentAmount?.value,
       bankName: form.elements.bankName?.value,
       accountNumber: form.elements.accountNumber?.value,
       accountHolder: form.elements.accountHolder?.value,
@@ -4800,6 +5101,7 @@
     // form.reset() 후에는 disabled placeholder 가 다시 selected 가 되어 value 가 "" 으로 돌아갑니다.
     form.elements.assignedInstructor.value = "";
     form.elements.curriculum.value = "";
+    setGenderOnForm(form, "");
     renderStudentTabSelectionInForm(
       form,
       state.selectedStudentTabId && state.selectedStudentTabId !== "all" ? [state.selectedStudentTabId] : []
@@ -4810,6 +5112,7 @@
     form.elements.id.value = s.id || "";
     form.elements.name.value = s.name || "";
     form.elements.birthDate.value = s.birthDate || "";
+    setGenderOnForm(form, s.gender);
     ensureInstructorOption(form, s.assignedInstructor);
     form.elements.assignedInstructor.value = s.assignedInstructor || "";
     form.elements.contact.value = s.contact || "";
@@ -4870,6 +5173,7 @@
     return {
       name: String(fd.get("name") || "").trim(),
       birthDate: String(fd.get("birthDate") || "").trim(),
+      gender: readGenderFromForm(form),
       assignedInstructor: String(fd.get("assignedInstructor") || "").trim(),
       studentTabIds: normalizeStringArray(fd.getAll("studentTabIds").map(String)),
       registeredSessions: toNumber("registeredSessions"),
@@ -5425,6 +5729,10 @@
     state.filter = "all";
     state.keyword = "";
     state.courseTrackFilter = "all";
+    state.instructorFilter = "all";
+    state.studentGenderFilter = "all";
+    state.counselingGenderFilter = "all";
+    state.studentDashboardFilter = null;
     state.studentSort = "default";
     state.salesFilter = "all";
     state.counselingStatusFilter = "all";
@@ -5568,11 +5876,27 @@
     }
     const refundSheetForm = document.getElementById("refund-sheet-form");
     if (refundSheetForm) {
-      refundSheetForm.addEventListener("input", () => {
+      refundSheetForm.addEventListener("input", (e) => {
         if (!state.refundStudentId) return;
         const student = state.students.find((item) => item.id === state.refundStudentId);
         if (!student) return;
+        const target = e.target;
         state.refundDraft = readRefundDraftFromForm(refundSheetForm);
+        if (target && target.name === "regularPrice") {
+          const group = getStudentPaymentGroupById(student, state.refundDraft.paymentGroupId);
+          const calc = calculateRefundFromRegularPrice(
+            state.refundDraft.regularPrice,
+            group ? group.totalSessions : 0,
+            group ? group.completedCount : 0
+          );
+          if (refundSheetForm.elements.perSessionPrice) {
+            refundSheetForm.elements.perSessionPrice.value = calc.perSessionPrice;
+          }
+          if (refundSheetForm.elements.refundAmount) {
+            refundSheetForm.elements.refundAmount.value = calc.refundAmount;
+          }
+          state.refundDraft = readRefundDraftFromForm(refundSheetForm);
+        }
         const previewEl = document.getElementById("refund-sheet-preview");
         if (previewEl) previewEl.innerHTML = renderRefundSheetPreview(student, state.refundDraft);
       });
