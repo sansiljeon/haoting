@@ -3084,7 +3084,13 @@
       : '<span class="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 md:px-2.5 md:text-xs"><i class="fa-solid fa-circle text-[6px]"></i>휴원·퇴원</span>';
 
     return `
-      <tr class="student-row" data-id="${escapeHtml(s.id)}">
+      <tr
+        class="student-row"
+        data-id="${escapeHtml(s.id)}"
+        tabindex="0"
+        role="button"
+        aria-label="${escapeHtml(s.name || "학생")} 상세 정보 열기"
+      >
         <td class="whitespace-nowrap px-4 py-3.5 md:px-6">
           <div class="flex items-center gap-3">
             <span class="w-7 shrink-0 text-center text-xs font-semibold tabular-nums text-slate-400 md:w-8 md:text-sm" aria-hidden="true">${formatNumber(num)}</span>
@@ -4686,6 +4692,12 @@
       row.addEventListener("click", () => {
         const id = row.dataset.id;
         openStudentDetailModal(id);
+      });
+      row.addEventListener("keydown", (e) => {
+        if (e.target !== row) return;
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        openStudentDetailModal(row.dataset.id);
       });
     });
   }
