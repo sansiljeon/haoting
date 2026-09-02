@@ -200,6 +200,14 @@
             <i class="fa-solid fa-comments w-5 text-center text-slate-400 group-[.active]:text-brand-600"></i>
             <span>상담기록</span>
           </button>
+          <button
+            type="button"
+            data-route="study"
+            class="nav-item group flex w-full min-h-11 items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+          >
+            <i class="fa-solid fa-book w-5 text-center text-slate-400 group-[.active]:text-brand-600"></i>
+            <span>학습·숙제 기록</span>
+          </button>
         </nav>
 
         <div class="border-t border-slate-200 p-4">
@@ -956,10 +964,12 @@
     <!--
       로딩 순서:
       1) firebase-config.js    : window.HAOTING_FIREBASE_CONFIG
-      2) firebase.js (module)    : Firestore + Auth → window.HaotingDB (students, counselingRecords)
-      3) app.js (defer)
+      2) api-config.js         : window.HAOTING_API_TOKEN (구글 캘린더/시트 연동용 /api/* 보호 토큰)
+      3) firebase.js (module)    : Firestore + Auth → window.HaotingDB (students, counselingRecords)
+      4) app.js (defer)
     -->
     <script src="./firebase-config.js"></script>
+    <script src="./api-config.js"></script>
     <script type="module" src="./firebase.js"></script>
     <script src="./app.js" defer></script>
   </body>
