@@ -2151,7 +2151,7 @@
                 const nameCell = name
                   ? escapeHtml(name)
                   : `<span class="text-amber-600">${escapeHtml(r.studentId || "-")}</span>
-                     <span class="ml-1 text-[11px] text-slate-400">(학생 목록에 없음)</span>`;
+                     <span class="ml-1 text-[11px] text-slate-500">(학생 목록에 없음)</span>`;
                 const preview = escapeHtml(getCounselingListPreview(n));
                 const registered = isCounselingRegistered(n);
                 const tip = escapeHtml(
@@ -2177,10 +2177,10 @@
                   </span>
                 </td>
                 <td class="whitespace-nowrap px-4 py-3 text-right md:px-6">
-                  <button type="button" class="counseling-edit inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-brand-600" data-id="${escapeHtml(r.id)}" title="수정" aria-label="수정">
+                  <button type="button" class="counseling-edit inline-flex h-11 w-11 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-brand-600" data-id="${escapeHtml(r.id)}" title="수정" aria-label="수정">
                     <i class="fa-solid fa-pen-to-square"></i>
                   </button>
-                  <button type="button" class="counseling-delete inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600" data-id="${escapeHtml(r.id)}" title="삭제" aria-label="삭제">
+                  <button type="button" class="counseling-delete inline-flex h-11 w-11 items-center justify-center rounded-md text-slate-500 transition hover:bg-red-50 hover:text-red-600" data-id="${escapeHtml(r.id)}" title="삭제" aria-label="삭제">
                     <i class="fa-solid fa-trash"></i>
                   </button>
                 </td>
@@ -2208,17 +2208,17 @@
         <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <p class="text-xs font-medium text-slate-500">전체 상담</p>
           <p class="mt-2 text-xl font-semibold text-slate-900">${formatNumber(stats.total)}건</p>
-          <p class="mt-1 text-[11px] text-slate-400">누적 상담 기록</p>
+          <p class="mt-1 text-[11px] text-slate-500">누적 상담 기록</p>
         </div>
         <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <p class="text-xs font-medium text-slate-500">등록 완료</p>
           <p class="mt-2 text-xl font-semibold text-emerald-700">${formatNumber(stats.registered)}건</p>
-          <p class="mt-1 text-[11px] text-slate-400">연락처 연계 또는 수동 체크 기준</p>
+          <p class="mt-1 text-[11px] text-slate-500">연락처 연계 또는 수동 체크 기준</p>
         </div>
         <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <p class="text-xs font-medium text-slate-500">전환율</p>
           <p class="mt-2 text-xl font-semibold text-slate-900">${stats.rate.toFixed(1)}%</p>
-          <p class="mt-1 text-[11px] text-slate-400">미등록 ${formatNumber(stats.pending)}건</p>
+          <p class="mt-1 text-[11px] text-slate-500">미등록 ${formatNumber(stats.pending)}건</p>
         </div>
       </section>
 
@@ -2427,7 +2427,7 @@
           <div class="min-w-0 flex-1">
             <label class="sr-only" for="counseling-search-input">이름 검색</label>
             <div class="relative">
-              <i class="fa-solid fa-magnifying-glass pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
+              <i class="fa-solid fa-magnifying-glass pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"></i>
               <input
                 id="counseling-search-input"
                 type="search"
@@ -2941,7 +2941,7 @@
         ? `<div class="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             <i class="fa-solid fa-circle-exclamation mr-1.5"></i>${escapeHtml(state.studyRecordsError)}
           </div>`
-        : `<div class="mb-4 text-xs text-slate-400">
+        : `<div class="mb-4 text-xs text-slate-500">
             <i class="fa-solid fa-circle-info mr-1"></i>
             실시간 반영이 아니므로, 다른 화면/기기에서 변경한 내용은 새로고침 버튼을 눌러야 보입니다.
           </div>`;
@@ -2974,12 +2974,12 @@
                   } px-2.5 py-1 text-[11px] font-medium">${checked ? "확인완료" : "미확인"}</span>
                 </td>
                 <td class="whitespace-nowrap px-4 py-3 text-right md:px-6">
-                  <button type="button" class="study-edit inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-brand-600" data-id="${escapeHtml(
+                  <button type="button" class="study-edit inline-flex h-11 w-11 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-brand-600" data-id="${escapeHtml(
                     r.id
                   )}" title="수정" aria-label="수정">
                     <i class="fa-solid fa-pen-to-square"></i>
                   </button>
-                  <button type="button" class="study-delete inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600" data-id="${escapeHtml(
+                  <button type="button" class="study-delete inline-flex h-11 w-11 items-center justify-center rounded-md text-slate-500 transition hover:bg-red-50 hover:text-red-600" data-id="${escapeHtml(
                     r.id
                   )}" title="삭제" aria-label="삭제">
                     <i class="fa-solid fa-trash"></i>
@@ -3021,7 +3021,7 @@
         <form id="study-form" novalidate>
           <div class="flex items-center justify-between">
             <h3 class="text-sm font-semibold text-slate-900">${isEditing ? "기록 수정" : "새 기록 추가"}</h3>
-            ${isEditing ? `<button type="button" id="study-cancel-edit" class="text-xs text-slate-400 hover:text-slate-600">수정 취소</button>` : ""}
+            ${isEditing ? `<button type="button" id="study-cancel-edit" class="text-xs text-slate-500 hover:text-slate-600">수정 취소</button>` : ""}
           </div>
           <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <div>
@@ -3435,7 +3435,7 @@
             </p>
             ${
               s.sub
-                ? `<p class="mt-1 truncate text-[11px] text-slate-400" title="${escapeHtml(s.sub)}">${escapeHtml(s.sub)}</p>`
+                ? `<p class="mt-1 truncate text-[11px] text-slate-500" title="${escapeHtml(s.sub)}">${escapeHtml(s.sub)}</p>`
                 : ""
             }
           </div>
@@ -3479,7 +3479,7 @@
             <label for="active-only-input" class="cursor-pointer text-sm font-medium text-slate-700">
               현재 수강 중인 학생만 보기
             </label>
-            <span class="hidden text-xs text-slate-400 sm:inline">
+            <span class="hidden text-xs text-slate-500 sm:inline">
               · 표시 ${formatNumber(sortedFilteredStudents.length)}명 / 전체 ${formatNumber(total)}명
             </span>
           </div>
@@ -3492,7 +3492,7 @@
               </select>
             </div>
             <div class="relative w-full md:w-72">
-              <i class="fa-solid fa-magnifying-glass pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
+              <i class="fa-solid fa-magnifying-glass pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"></i>
               <input
                 id="search-input"
                 type="search"
@@ -3712,7 +3712,7 @@
   function renderTableLoading() {
     return `
       <div class="flex flex-col items-center justify-center px-6 py-16 text-center">
-        <span class="flex h-14 w-14 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+        <span class="flex h-14 w-14 items-center justify-center rounded-full bg-slate-100 text-slate-500">
           <i class="fa-solid fa-rotate fa-spin text-xl"></i>
         </span>
         <p class="mt-4 text-sm font-medium text-slate-700">데이터를 불러오는 중...</p>
@@ -3768,11 +3768,11 @@
       >
         <td class="whitespace-nowrap px-4 py-3.5 md:px-6">
           <div class="flex items-center gap-3">
-            <span class="w-7 shrink-0 text-center text-xs font-semibold tabular-nums text-slate-400 md:w-8 md:text-sm" aria-hidden="true">${formatNumber(num)}</span>
+            <span class="w-7 shrink-0 text-center text-xs font-semibold tabular-nums text-slate-500 md:w-8 md:text-sm" aria-hidden="true">${formatNumber(num)}</span>
             <div class="min-w-0 leading-tight">
               <div class="flex items-center gap-1.5">
                 <p class="truncate font-medium text-slate-900">${escapeHtml(s.name)}</p>
-                <i class="fa-solid fa-chevron-down text-[10px] text-slate-400 transition-transform md:hidden ${
+                <i class="fa-solid fa-chevron-down text-[10px] text-slate-500 transition-transform md:hidden ${
                   isExpanded ? "rotate-180" : ""
                 }"></i>
               </div>
@@ -3786,10 +3786,10 @@
         <td class="whitespace-nowrap px-4 py-3.5 text-right tabular-nums text-slate-700 md:px-6">
           <div class="flex flex-col items-end">
             <span>${formatNumber(s.registeredSessions || 0)}회</span>
-            <span class="mt-0.5 text-[11px] text-slate-400">1회당 ${escapeHtml(
+            <span class="mt-0.5 text-[11px] text-slate-500">1회당 ${escapeHtml(
               formatCurrencyOrDash(unitPrice)
             )} · 총액 ${escapeHtml(formatCurrencyOrDash(receivedAmountTotal))}</span>
-            <span class="mt-0.5 text-[11px] text-slate-400">${formatNumber(completedSessions)}회 진행 · 재등록 ${formatNumber(renewalCount)}회</span>
+            <span class="mt-0.5 text-[11px] text-slate-500">${formatNumber(completedSessions)}회 진행 · 재등록 ${formatNumber(renewalCount)}회</span>
           </div>
         </td>
         <td class="hidden px-4 py-3.5 text-slate-600 md:table-cell md:px-6">
@@ -3799,7 +3799,7 @@
         <td class="whitespace-nowrap px-2 py-3.5 text-center md:px-3">
           <button
             type="button"
-            class="action-sessions inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-brand-50 hover:text-brand-600"
+            class="action-sessions inline-flex h-11 w-11 items-center justify-center rounded-md text-slate-500 transition hover:bg-brand-50 hover:text-brand-600"
             data-id="${escapeHtml(s.id)}"
             title="회차 관리"
             aria-label="회차 관리"
@@ -3810,7 +3810,7 @@
         <td class="whitespace-nowrap px-2 py-3.5 text-center md:px-3">
           <button
             type="button"
-            class="action-edit inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-brand-600"
+            class="action-edit inline-flex h-11 w-11 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-brand-600"
             data-id="${escapeHtml(s.id)}"
             title="수정"
             aria-label="수정"
@@ -3821,7 +3821,7 @@
         <td class="whitespace-nowrap px-2 py-3.5 text-center md:px-3">
           <button
             type="button"
-            class="action-delete inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+            class="action-delete inline-flex h-11 w-11 items-center justify-center rounded-md text-slate-500 transition hover:bg-red-50 hover:text-red-600"
             data-id="${escapeHtml(s.id)}"
             title="삭제"
             aria-label="삭제"
@@ -4308,7 +4308,7 @@
                             }
                             <button
                               type="button"
-                              class="renewal-edit inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700"
+                              class="renewal-edit inline-flex min-h-11 items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700"
                               data-student-id="${escapeHtml(s.id)}"
                               data-entry-id="${escapeHtml(entry.id)}"
                             >
@@ -4316,7 +4316,7 @@
                             </button>
                             <button
                               type="button"
-                              class="renewal-delete inline-flex items-center rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-600 transition hover:bg-red-50"
+                              class="renewal-delete inline-flex min-h-11 items-center rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-600 transition hover:bg-red-50"
                               data-student-id="${escapeHtml(s.id)}"
                               data-entry-id="${escapeHtml(entry.id)}"
                             >
@@ -4340,7 +4340,7 @@
                         ? `<div class="payment-group-wrap mb-4 rounded-xl border border-slate-200 bg-white/80 p-3">
                             <div class="payment-group-header flex flex-wrap items-center justify-between gap-3">
                               <div class="payment-group-copy">
-                                <p class="payment-group-title text-xs font-semibold uppercase tracking-wider text-slate-400">결제일별 회차</p>
+                                <p class="payment-group-title text-xs font-semibold uppercase tracking-wider text-slate-500">결제일별 회차</p>
                                 <p class="payment-group-desc mt-1 text-xs text-slate-500">선택한 결제 묶음 안에서 회차가 1회차부터 다시 시작됩니다.</p>
                               </div>
                               ${
@@ -4452,7 +4452,7 @@
                                         </span>`
                                       : ""
                                   }
-                                  <label class="session-complete-toggle inline-flex cursor-pointer items-center gap-2 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700">
+                                  <label class="session-complete-toggle inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700">
                                     <input
                                       type="checkbox"
                                       class="session-progress-check h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
@@ -4462,7 +4462,7 @@
                                     />
                                     완료
                                   </label>
-                                  <label class="session-cancel-toggle inline-flex cursor-pointer items-center gap-2 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-rose-600">
+                                  <label class="session-cancel-toggle inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-rose-600">
                                     <input
                                       type="checkbox"
                                       class="session-cancel-check h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500"
@@ -4534,7 +4534,7 @@
                                     <p class="text-[11px] font-semibold text-slate-700">안내 문자</p>
                                     <button
                                       type="button"
-                                      class="session-copy-message inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                      class="session-copy-message inline-flex min-h-11 items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                                       data-student-id="${escapeHtml(s.id)}"
                                       data-session-number="${activeSlot.sessionNumber}"
                                       ${hasMessage ? "" : "disabled"}
@@ -4573,7 +4573,7 @@
   function renderEmpty() {
     return `
       <div class="flex flex-col items-center justify-center px-6 py-16 text-center">
-        <span class="flex h-14 w-14 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+        <span class="flex h-14 w-14 items-center justify-center rounded-full bg-slate-100 text-slate-500">
           <i class="fa-solid fa-user-slash text-xl"></i>
         </span>
         <p class="mt-4 text-sm font-medium text-slate-700">표시할 학생이 없습니다.</p>
@@ -4700,7 +4700,7 @@
               </span>
             </div>
             <p class="mt-3 text-xl font-semibold text-slate-900">${escapeHtml(s.value)}</p>
-            <p class="mt-1 text-[11px] text-slate-400">${escapeHtml(s.sub)}</p>
+            <p class="mt-1 text-[11px] text-slate-500">${escapeHtml(s.sub)}</p>
           </div>
         `
           )
@@ -4732,7 +4732,7 @@
                 >신규 등록</button>
               </div>
               <div class="text-right">
-                <p class="text-[11px] text-slate-400">표시 기간 합계</p>
+                <p class="text-[11px] text-slate-500">표시 기간 합계</p>
                 <p class="text-sm font-semibold text-slate-900">
                   ${chartMode === "count" ? `${formatNumber(monthlyRegistrationSum)}명` : formatCurrency(monthlySum)}
                 </p>
@@ -4840,7 +4840,7 @@
   function renderMonthlyChart(monthly, max, mode = "revenue") {
     if (monthly.length === 0 || max <= 1) {
       return `
-        <div class="flex h-56 flex-col items-center justify-center text-center text-sm text-slate-400">
+        <div class="flex h-56 flex-col items-center justify-center text-center text-sm text-slate-500">
           <i class="fa-regular fa-chart-bar mb-2 text-2xl"></i>
           집계할 등록 데이터가 없습니다.
         </div>
@@ -4879,7 +4879,7 @@
             (m) => `
           <div class="flex flex-1 flex-col items-center text-center">
             <span class="text-xs font-medium text-slate-600">${m.month}월</span>
-            <span class="text-[10px] text-slate-400">${
+            <span class="text-[10px] text-slate-500">${
               mode === "count" ? `${formatNumber(m.count)}명` : formatCompactCurrency(m.total)
             }</span>
           </div>
@@ -4892,7 +4892,7 @@
 
   function renderInstructorBars(stats, max) {
     if (stats.length === 0) {
-      return `<div class="py-8 text-center text-sm text-slate-400">데이터가 없습니다.</div>`;
+      return `<div class="py-8 text-center text-sm text-slate-500">데이터가 없습니다.</div>`;
     }
 
     const palette = ["bg-brand-600", "bg-brand-500", "bg-brand-400", "bg-brand-300"];
@@ -4931,7 +4931,7 @@
 
   function renderInstructorTable(stats, totalRevenue) {
     if (stats.length === 0) {
-      return `<div class="px-5 py-12 text-center text-sm text-slate-400">강사 데이터가 없습니다.</div>`;
+      return `<div class="px-5 py-12 text-center text-sm text-slate-500">강사 데이터가 없습니다.</div>`;
     }
 
     return `
@@ -5495,6 +5495,60 @@
   /* ==========================================================
    * 8. 학생 추가/수정 모달
    * ========================================================== */
+  // 모달이 열려 있는 동안 Tab 이 배경 요소로 빠져나가지 않도록 포커스를 모달 내부로 가둡니다.
+  // 닫힐 때는 모달을 열기 전 포커스였던 요소로 되돌립니다.
+  const modalFocusTraps = new Map();
+
+  function getFocusableElements(container) {
+    if (!container) return [];
+    const selector =
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    return Array.from(container.querySelectorAll(selector)).filter(
+      (el) => el.tabIndex !== -1 && el.offsetParent !== null
+    );
+  }
+
+  function trapModalFocus(modalEl) {
+    if (!modalEl || modalFocusTraps.has(modalEl)) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const handleKeydown = (e) => {
+      if (e.key !== "Tab") return;
+      const focusable = getFocusableElements(modalEl);
+      if (focusable.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey) {
+        if (active === first || !modalEl.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !modalEl.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    modalEl.addEventListener("keydown", handleKeydown);
+    modalFocusTraps.set(modalEl, { previouslyFocused, handleKeydown });
+  }
+
+  function releaseModalFocus(modalEl) {
+    const entry = modalFocusTraps.get(modalEl);
+    if (!entry) return;
+    modalEl.removeEventListener("keydown", entry.handleKeydown);
+    modalFocusTraps.delete(modalEl);
+    if (
+      entry.previouslyFocused &&
+      document.contains(entry.previouslyFocused) &&
+      typeof entry.previouslyFocused.focus === "function"
+    ) {
+      entry.previouslyFocused.focus();
+    }
+  }
+
   function openStudentModal(id) {
     const modal = document.getElementById("student-modal");
     const form = document.getElementById("student-form");
@@ -5528,6 +5582,7 @@
     modal.classList.remove("hidden");
     modal.classList.add("modal-open");
     document.body.style.overflow = "hidden";
+    trapModalFocus(modal);
     wireTemporalInputAutoFormat(form);
     setTimeout(() => {
       const focusable = form.querySelector("input[name='name']");
@@ -5545,6 +5600,7 @@
     document.body.style.overflow = "";
     state.editingId = null;
     state.pendingCounselingLinkId = null;
+    releaseModalFocus(modal);
   }
 
   function openStudentDetailModal(id) {
@@ -5564,6 +5620,7 @@
     modal.classList.remove("hidden");
     modal.classList.add("modal-open");
     document.body.style.overflow = "hidden";
+    trapModalFocus(modal);
   }
 
   function closeStudentDetailModal() {
@@ -5575,6 +5632,7 @@
     modal.style.setProperty("display", "none", "important");
     document.body.style.overflow = "";
     state.detailStudentId = null;
+    releaseModalFocus(modal);
   }
 
   function syncStudentDetailModal() {
@@ -5607,6 +5665,7 @@
     modal.classList.remove("hidden");
     modal.classList.add("modal-open");
     document.body.style.overflow = "hidden";
+    trapModalFocus(modal);
   }
 
   function closeCounselingDetailModal() {
@@ -5618,6 +5677,7 @@
     modal.style.setProperty("display", "none", "important");
     document.body.style.overflow = "";
     state.detailCounselingId = null;
+    releaseModalFocus(modal);
   }
 
   function syncCounselingDetailModal() {
@@ -5879,6 +5939,7 @@
     modal.classList.remove("hidden");
     modal.classList.add("modal-open");
     document.body.style.overflow = "hidden";
+    trapModalFocus(modal);
   }
 
   function closeRefundSheetModal() {
@@ -5892,6 +5953,7 @@
     document.body.classList.remove("printing-refund-sheet");
     state.refundStudentId = null;
     state.refundDraft = null;
+    releaseModalFocus(modal);
   }
 
   function syncRefundSheetModal() {
@@ -6516,6 +6578,7 @@
       okBtn.removeEventListener("click", handleOk);
       cancelBtn.removeEventListener("click", handleCancel);
       modal.removeEventListener("click", handleBackdrop);
+      releaseModalFocus(modal);
     };
     const handleOk = () => {
       cleanup();
@@ -6531,6 +6594,7 @@
     modal.addEventListener("click", handleBackdrop);
 
     modal.classList.add("modal-open");
+    trapModalFocus(modal);
   }
 
   /* ==========================================================
@@ -6929,7 +6993,12 @@
     // ESC 키로 모달 닫기
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
-      // 우선순위: 환불서 모달 → 상담 상세 모달 → 학생 상세 모달 → 학생 수정 모달 → 모바일 사이드바
+      // 우선순위: 확인 모달 → 환불서 모달 → 상담 상세 모달 → 학생 상세 모달 → 학생 수정 모달 → 모바일 사이드바
+      // 확인 모달은 다른 모달 위에 겹쳐 뜰 수 있어 항상 가장 먼저 닫습니다.
+      if (document.getElementById("confirm-modal")?.classList.contains("modal-open")) {
+        document.getElementById("confirm-cancel")?.click();
+        return;
+      }
       if (document.getElementById("refund-sheet-modal")?.classList.contains("modal-open")) {
         closeRefundSheetModal();
         return;

@@ -601,7 +601,7 @@ textarea.form-input {
   justify-content: center;
   width: 2rem;
   border: none;
-  color: #94a3b8;
+  color: #64748b;
   border-left: 1px solid #e2e8f0;
   transition:
     background-color 0.15s ease,
@@ -760,7 +760,7 @@ textarea.form-input {
   margin: 0.35rem 0 0;
   font-size: 0.74rem;
   letter-spacing: 0.24em;
-  color: #94a3b8;
+  color: #64748b;
 }
 
 .refund-sheet-block + .refund-sheet-block {
@@ -1384,4 +1384,33 @@ textarea.form-input {
 .schedule-time-input::-webkit-calendar-picker-indicator {
   opacity: 0.75;
   cursor: pointer;
+}
+
+/* ===========================================================
+   모션 민감 사용자 대응 (prefers-reduced-motion)
+   - 정보 전달과 무관한 슬라이드·스크롤 애니메이션만 제거/축소합니다.
+   - 토스트는 내용이 그대로 보이도록 위치 이동 없이 즉시 나타나게 하고,
+     사이드바·스위치·모달 상태 전환은 애니메이션 없이 즉시 반영합니다.
+   =========================================================== */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  #toast.show {
+    animation: none;
+    opacity: 1;
+  }
+
+  .toggle .knob {
+    transition: none;
+  }
+
+  #sidebar {
+    transition: none;
+  }
+
+  #mobile-backdrop {
+    transition: none;
+  }
 }
