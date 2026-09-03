@@ -153,6 +153,7 @@
     editingId: null, // 모달이 수정 모드일 때의 학생 id
     pendingDeleteId: null, // 확인 모달에서 삭제 대상
     salesFilter: "all", // 매출 화면 필터: "all" | "active"
+    salesChartMode: "revenue", // 매출 추이 차트 표시 기준: "revenue" | "count" (신규 등록 학생 수)
     currentUser: null, // 로그인 한 선생님 정보 (없으면 비로그인)
     expandedRowIds: new Set(), // 회차 관리가 펼쳐진 학생 행 id 들
     selectedPaymentGroupByStudent: {}, // 학생별 현재 선택된 결제 묶음 id
@@ -398,7 +399,18 @@
       const endTime = String(item.endTime || "").trim();
       const isCompleted = item.isCompleted != null ? !!item.isCompleted : !!legacyCompletedAt;
       const calendarEventId = String(item.calendarEventId || "").trim();
-      if (!sessionDate && !startTime && !endTime && !isCompleted && !calendarEventId) return;
+      const isCancelled = !!item.isCancelled;
+      const makeupDate = String(item.makeupDate || "").trim();
+      if (
+        !sessionDate &&
+        !startTime &&
+        !endTime &&
+        !isCompleted &&
+        !calendarEventId &&
+        !isCancelled &&
+        !makeupDate
+      )
+        return;
       map.set(sessionNumber, {
         sessionNumber,
         sessionDate,
@@ -406,6 +418,8 @@
         endTime,
         isCompleted,
         calendarEventId,
+        isCancelled,
+        makeupDate,
       });
     });
     return Array.from(map.values()).sort((a, b) => a.sessionNumber - b.sessionNumber);
@@ -449,6 +463,7 @@
       receivedAmountTotal,
       scheduleDays: Array.isArray(s.scheduleDays) ? s.scheduleDays : [],
       scheduleDayTimes: normalizeScheduleDayTimesMap(s.scheduleDayTimes),
+      scheduleMemo: String(s.scheduleMemo || "").trim(),
       studentTabIds: normalizeStringArray(s.studentTabIds),
       sessionRecords: normalizeSessionRecords(s.sessionRecords),
       renewalHistory: normalizeRenewalHistory(s.renewalHistory),
@@ -774,6 +789,7 @@
     if (slotList.length === 0) return [];
     return slotList
       .filter((slot) => {
+        if (slot.isCancelled) return false;
         const dateLabel = formatScheduledDateForMessage(slot.sessionDate);
         const timeLabel = buildScheduledTimeRangeText(slot.startTime, slot.endTime);
         return !!dateLabel && !!timeLabel;
@@ -853,6 +869,8 @@
       endTime: "",
       isCompleted: false,
       calendarEventId: "",
+      isCancelled: false,
+      makeupDate: "",
     };
     // Captured before the possible delete-if-empty branch below, since a fully
     // cleared record loses its calendarEventId and we still need it to delete
@@ -863,7 +881,9 @@
       !merged.sessionDate &&
       !merged.startTime &&
       !merged.endTime &&
-      !merged.isCompleted
+      !merged.isCompleted &&
+      !merged.isCancelled &&
+      !merged.makeupDate
     ) {
       nextMap.delete(sessionNumber);
     } else {
@@ -1894,6 +1914,19 @@
     return `${yyyy}.${mm}.${dd}`;
   }
 
+  function dateObjectToISO(d) {
+    if (!(d instanceof Date) || Number.isNaN(d.getTime())) return "";
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function formatDateFromDateObject(d) {
+    const iso = dateObjectToISO(d);
+    return iso ? formatDate(iso) : "-";
+  }
+
   function formatCountWithUnit(value, unit) {
     const n = Number(value);
     return Number.isFinite(n) ? `${formatNumber(n)}${unit}` : "-";
@@ -1945,20 +1978,28 @@
     return `${names.slice(0, maxShown).join(", ")} 외 ${names.length - maxShown}명`;
   }
 
-  // 등록일 + (등록 회차 / 주당 수업 횟수) 주 ≒ 예상 종료일.
-  // 수업 요일이 없으면 주 1회로 보수적으로 추정합니다. 데이터가 부족하면 null.
+  /** 스케줄 요일 중 "유동"을 제외한 주당 실제 수업 횟수. 요일 정보가 없으면 주 1회로 보수적으로 추정합니다. */
+  function getStudentSessionsPerWeek(student) {
+    const days = Array.isArray(student && student.scheduleDays)
+      ? student.scheduleDays.filter((d) => String(d).trim() !== SCHEDULE_FLEXIBLE_DAY)
+      : [];
+    return days.length > 0 ? days.length : 1;
+  }
+
+  // 오늘 기준 남은 회차(등록 회차 - 완료 회차) / 주당 수업 횟수 ≒ 결제(갱신) 예정일.
+  // 등록일 기준이 아니라 "남은 기간" 기준으로 계산해, 완료·취소된 회차 진행 속도를 반영합니다.
+  // 데이터가 부족하면 null.
   function estimateClassEndDate(student) {
-    if (!student || !student.registrationDate) return null;
-    const start = new Date(student.registrationDate);
-    if (Number.isNaN(start.getTime())) return null;
-    const sessions = Number(student.registeredSessions) || 0;
-    if (sessions <= 0) return null;
-    const perWeek =
-      Array.isArray(student.scheduleDays) && student.scheduleDays.length > 0
-        ? student.scheduleDays.length
-        : 1;
-    const weeks = sessions / perWeek;
-    const end = new Date(start);
+    if (!student) return null;
+    const totalSessions = Math.max(0, Number(student.registeredSessions) || 0);
+    if (totalSessions <= 0) return null;
+    const completed = getStudentSessionCount(student);
+    const remaining = totalSessions - completed;
+    const today = new Date();
+    if (remaining <= 0) return today;
+    const perWeek = getStudentSessionsPerWeek(student);
+    const weeks = remaining / perWeek;
+    const end = new Date(today);
     end.setDate(end.getDate() + Math.ceil(weeks * 7));
     return end;
   }
@@ -2049,6 +2090,12 @@
         render();
       });
     }
+    document.querySelectorAll("[data-chart-mode]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.salesChartMode = btn.dataset.chartMode === "count" ? "count" : "revenue";
+        render();
+      });
+    });
   }
 
   /* ----------------------------------------------------------
@@ -3816,6 +3863,10 @@
           { label: "등록일", value: formatDate(student.registrationDate) },
           { label: "마지막 수강일", value: formatDate(student.lastClassDate) },
           {
+            label: "결제 예정일",
+            value: student.isActive ? formatDateFromDateObject(estimateClassEndDate(student)) : "-",
+          },
+          {
             label: "수업 요일",
             value:
               Array.isArray(student.scheduleDays) && student.scheduleDays.length > 0
@@ -3823,6 +3874,7 @@
                 : "-",
             fullWidth: true,
           },
+          { label: "일정 메모", value: student.scheduleMemo, fullWidth: true, multiline: true },
         ],
       },
       {
@@ -4140,6 +4192,14 @@
                   </span>
                   <button
                     type="button"
+                    class="action-schedule-next-round inline-flex items-center gap-2 rounded-lg border border-brand-200 bg-white px-3 py-1.5 text-xs font-semibold text-brand-700 transition hover:bg-brand-50"
+                    data-id="${escapeHtml(s.id)}"
+                  >
+                    <i class="fa-solid fa-calendar-plus"></i>
+                    다음 회차 예약
+                  </button>
+                  <button
+                    type="button"
                     class="action-refund-sheet inline-flex items-center gap-2 rounded-lg border border-brand-200 bg-white px-3 py-1.5 text-xs font-semibold text-brand-700 transition hover:bg-brand-50"
                     data-id="${escapeHtml(s.id)}"
                   >
@@ -4164,7 +4224,11 @@
                       type="date"
                       name="renewalDate"
                       class="form-input text-sm"
-                      value="${escapeHtml(editingRenewal ? editingRenewal.renewalDate : todayISO())}"
+                      value="${escapeHtml(
+                        editingRenewal
+                          ? editingRenewal.renewalDate
+                          : dateObjectToISO(estimateClassEndDate(s)) || todayISO()
+                      )}"
                     />
                     <input
                       type="number"
@@ -4398,7 +4462,31 @@
                                     />
                                     완료
                                   </label>
+                                  <label class="session-cancel-toggle inline-flex cursor-pointer items-center gap-2 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-rose-600">
+                                    <input
+                                      type="checkbox"
+                                      class="session-cancel-check h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500"
+                                      data-student-id="${escapeHtml(s.id)}"
+                                      data-session-number="${activeSlot.sessionNumber}"
+                                      ${activeSlot.isCancelled ? "checked" : ""}
+                                    />
+                                    휴강/취소
+                                  </label>
                                 </div>
+                                ${
+                                  activeSlot.isCancelled
+                                    ? `<div class="mt-2">
+                                        <label class="mb-1.5 block text-[11px] font-medium text-slate-500">변경(보강) 일자</label>
+                                        <input
+                                          type="date"
+                                          class="session-makeup-date form-input text-sm max-w-[200px]"
+                                          data-student-id="${escapeHtml(s.id)}"
+                                          data-session-number="${activeSlot.sessionNumber}"
+                                          value="${escapeHtml(activeSlot.makeupDate)}"
+                                        />
+                                      </div>`
+                                    : ""
+                                }
                                 ${
                                   scheduledSummary
                                     ? `<p class="mt-2 text-[11px] leading-5 text-slate-500">${escapeHtml(
@@ -4530,8 +4618,10 @@
       totalSessions === 0 ? 0 : Math.round(totalRevenue / totalSessions);
 
     const monthly = aggregateMonthlyRevenue(source);
-    const monthlyMax = Math.max(1, ...monthly.map((m) => m.total));
+    const chartMode = state.salesChartMode === "count" ? "count" : "revenue";
+    const monthlyMax = Math.max(1, ...monthly.map((m) => (chartMode === "count" ? m.count : m.total)));
     const monthlySum = monthly.reduce((s, m) => s + m.total, 0);
+    const monthlyRegistrationSum = monthly.reduce((s, m) => s + m.count, 0);
 
     const instructorStats = aggregateInstructorRevenue(source);
     const instructorMax = Math.max(
@@ -4622,14 +4712,34 @@
           <div class="mb-4 flex flex-wrap items-end justify-between gap-2">
             <div>
               <h3 class="text-base font-semibold text-slate-900">매출 추이</h3>
-              <p class="text-xs text-slate-500">학생 등록일 기준 월별 합계 · 막대에 마우스를 올리면 상세 표시</p>
+              <p class="text-xs text-slate-500">학생 등록일 기준 월별 집계 · 막대에 마우스를 올리면 상세 표시</p>
             </div>
-            <div class="text-right">
-              <p class="text-[11px] text-slate-400">표시 기간 합계</p>
-              <p class="text-sm font-semibold text-slate-900">${formatCurrency(monthlySum)}</p>
+            <div class="flex items-center gap-3">
+              <div class="inline-flex rounded-lg border border-slate-200 p-0.5 text-xs font-medium" role="group" aria-label="매출 추이 표시 기준">
+                <button
+                  type="button"
+                  id="sales-chart-mode-revenue"
+                  data-chart-mode="revenue"
+                  aria-pressed="${chartMode === "revenue" ? "true" : "false"}"
+                  class="rounded-md px-2.5 py-1 ${chartMode === "revenue" ? "bg-brand-600 text-white" : "text-slate-500 hover:text-slate-700"}"
+                >매출</button>
+                <button
+                  type="button"
+                  id="sales-chart-mode-count"
+                  data-chart-mode="count"
+                  aria-pressed="${chartMode === "count" ? "true" : "false"}"
+                  class="rounded-md px-2.5 py-1 ${chartMode === "count" ? "bg-brand-600 text-white" : "text-slate-500 hover:text-slate-700"}"
+                >신규 등록</button>
+              </div>
+              <div class="text-right">
+                <p class="text-[11px] text-slate-400">표시 기간 합계</p>
+                <p class="text-sm font-semibold text-slate-900">
+                  ${chartMode === "count" ? `${formatNumber(monthlyRegistrationSum)}명` : formatCurrency(monthlySum)}
+                </p>
+              </div>
             </div>
           </div>
-          ${renderMonthlyChart(monthly, monthlyMax)}
+          ${renderMonthlyChart(monthly, monthlyMax, chartMode)}
         </div>
 
         <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -4727,7 +4837,7 @@
 
   /* ----- 매출 차트/테이블 렌더러들 ----- */
 
-  function renderMonthlyChart(monthly, max) {
+  function renderMonthlyChart(monthly, max, mode = "revenue") {
     if (monthly.length === 0 || max <= 1) {
       return `
         <div class="flex h-56 flex-col items-center justify-center text-center text-sm text-slate-400">
@@ -4737,13 +4847,16 @@
       `;
     }
 
+    const valueOf = (m) => (mode === "count" ? m.count : m.total);
+
     return `
       <div class="relative h-56">
         <div class="flex h-full items-end gap-2 sm:gap-3">
           ${monthly
             .map((m) => {
-              const heightPct = (m.total / max) * 100;
-              const visibleHeight = m.total > 0 ? Math.max(heightPct, 4) : 0;
+              const value = valueOf(m);
+              const heightPct = (value / max) * 100;
+              const visibleHeight = value > 0 ? Math.max(heightPct, 4) : 0;
               return `
                 <div class="group flex h-full flex-1 flex-col items-center justify-end">
                   <div
@@ -4751,7 +4864,7 @@
                     style="height: ${visibleHeight}%"
                   >
                     <div class="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[11px] font-medium text-white shadow-lg group-hover:block">
-                      ${formatCurrency(m.total)} · ${formatNumber(m.count)}건
+                      ${formatCurrency(m.total)} · 신규 ${formatNumber(m.count)}명
                     </div>
                   </div>
                 </div>
@@ -4766,7 +4879,9 @@
             (m) => `
           <div class="flex flex-1 flex-col items-center text-center">
             <span class="text-xs font-medium text-slate-600">${m.month}월</span>
-            <span class="text-[10px] text-slate-400">${formatCompactCurrency(m.total)}</span>
+            <span class="text-[10px] text-slate-400">${
+              mode === "count" ? `${formatNumber(m.count)}명` : formatCompactCurrency(m.total)
+            }</span>
           </div>
         `
           )
@@ -5150,6 +5265,19 @@
       });
     });
 
+    // "다음 회차 예약": 재등록 폼으로 스크롤 + 회차 입력에 포커스해, 결제 전이라도
+    // 다음 묶음의 예상 시작일(예상 결제 예정일이 자동 채워짐)을 미리 잡아둘 수 있게 돕습니다.
+    document.querySelectorAll(".action-schedule-next-round").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const form = document.querySelector(`.renewal-form[data-student-id="${btn.dataset.id}"]`);
+        if (!form) return;
+        form.scrollIntoView({ behavior: "smooth", block: "center" });
+        form.elements.addedSessions?.focus();
+      });
+    });
+
     document.querySelectorAll(".renewal-form").forEach((formEl) => {
       formEl.addEventListener("submit", async (e) => {
         e.preventDefault();
@@ -5274,6 +5402,26 @@
             sessionDate: String(dateInput.value || "").trim(),
             isCompleted: !!input.checked,
           }
+        );
+      });
+    });
+
+    document.querySelectorAll(".session-cancel-check").forEach((input) => {
+      input.addEventListener("change", () => {
+        saveStudentSessionRecord(
+          input.dataset.studentId,
+          Number(input.dataset.sessionNumber),
+          { isCancelled: !!input.checked }
+        );
+      });
+    });
+
+    document.querySelectorAll(".session-makeup-date").forEach((input) => {
+      input.addEventListener("change", () => {
+        saveStudentSessionRecord(
+          input.dataset.studentId,
+          Number(input.dataset.sessionNumber),
+          { makeupDate: normalizeDateInputValue(String(input.value || "").trim()) }
         );
       });
     });
@@ -5888,15 +6036,13 @@
     sandbox.style.left = "-100000px";
     sandbox.style.top = "0";
     sandbox.style.width = "210mm";
-    sandbox.style.height = "0";
+    sandbox.style.height = "auto";
     sandbox.style.padding = "0";
     sandbox.style.margin = "0";
     sandbox.style.background = "#ffffff";
     sandbox.style.zIndex = "-1";
-    sandbox.style.opacity = "0";
-    sandbox.style.visibility = "hidden";
     sandbox.style.pointerEvents = "none";
-    sandbox.style.overflow = "hidden";
+    sandbox.style.overflow = "visible";
 
     const exportNode = previewPaper.cloneNode(true);
     exportNode.style.width = "190mm";
@@ -5988,6 +6134,7 @@
     form.elements.notes.value = s.notes || "";
     setScheduleDaysOnForm(form, Array.isArray(s.scheduleDays) ? s.scheduleDays : []);
     refreshScheduleDayTimeRows(form, normalizeScheduleDayTimesMap(s.scheduleDayTimes));
+    if (form.elements.scheduleMemo) form.elements.scheduleMemo.value = s.scheduleMemo || "";
     renderStudentTabSelectionInForm(form, s.studentTabIds);
   }
 
@@ -6062,6 +6209,7 @@
         });
         return normalizeScheduleDayTimesMap(map);
       })(),
+      scheduleMemo: String(fd.get("scheduleMemo") || "").trim(),
       renewalHistory: [],
       refundDraft: null,
     };
@@ -6589,6 +6737,7 @@
     state.studentDashboardFilter = null;
     state.studentSort = "default";
     state.salesFilter = "all";
+    state.salesChartMode = "revenue";
     state.counselingStatusFilter = "all";
     state.counselingKeyword = "";
     state.counselingSort = "default";
