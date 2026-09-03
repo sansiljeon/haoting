@@ -23,6 +23,17 @@ body {
   font-feature-settings: "ss06", "tnum";
 }
 
+/* ---- 버튼 눌림 피드백 ----
+   대부분의 버튼은 Tailwind .transition 유틸(transform 포함)을 이미 갖고 있어
+   :active 만 추가하면 됩니다. 없는 경우를 위한 최소 fallback transition도 둡니다. */
+button:not(:disabled) {
+  transition: transform 0.1s ease;
+}
+
+button:not(:disabled):active {
+  transform: scale(0.97);
+}
+
 /* ---- 폼 라벨/입력 ---- */
 .form-label {
   display: block;

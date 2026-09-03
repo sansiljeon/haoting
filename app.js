@@ -3710,13 +3710,25 @@
   }
 
   function renderTableLoading() {
+    const skeletonRow = () => `
+      <div class="flex items-center gap-4 border-b border-slate-100 px-4 py-3.5 last:border-b-0 md:px-6">
+        <div class="min-w-0 flex-1 space-y-2">
+          <div class="h-3.5 w-1/3 max-w-[160px] rounded bg-slate-200"></div>
+          <div class="hidden h-3 w-1/4 max-w-[110px] rounded bg-slate-100 md:block"></div>
+        </div>
+        <div class="hidden h-3 w-16 shrink-0 rounded bg-slate-200 md:block"></div>
+        <div class="hidden h-3 w-20 shrink-0 rounded bg-slate-200 lg:block"></div>
+        <div class="h-3 w-14 shrink-0 rounded bg-slate-200"></div>
+      </div>
+    `;
     return `
-      <div class="flex flex-col items-center justify-center px-6 py-16 text-center">
-        <span class="flex h-14 w-14 items-center justify-center rounded-full bg-slate-100 text-slate-500">
-          <i class="fa-solid fa-rotate fa-spin text-xl"></i>
-        </span>
-        <p class="mt-4 text-sm font-medium text-slate-700">데이터를 불러오는 중...</p>
-        <p class="mt-1 text-xs text-slate-500">Firebase 와 동기화하고 있습니다.</p>
+      <div
+        class="animate-pulse overflow-hidden rounded-xl border border-slate-200 bg-white"
+        role="status"
+        aria-label="학생 목록을 불러오는 중"
+      >
+        ${Array.from({ length: 6 }, skeletonRow).join("")}
+        <span class="sr-only">Firebase 와 동기화하며 데이터를 불러오는 중입니다.</span>
       </div>
     `;
   }

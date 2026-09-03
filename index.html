@@ -33,6 +33,11 @@
   </head>
 
   <body class="min-h-screen bg-slate-50 text-slate-800 antialiased">
+    <a
+      href="#main-view"
+      class="sr-only focus:not-sr-only focus:fixed focus:left-2 focus:top-2 focus:z-[100] focus:rounded-lg focus:bg-brand-600 focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-white focus:shadow-lg"
+      >본문으로 바로가기</a
+    >
     <!--
       로고용 SVG 필터: 검정 배경(JPEG)을 투명하게 만들기.
       alpha = R + G + B 로 매핑하므로 검정(0,0,0) → 알파 0(완전 투명),
@@ -287,7 +292,7 @@
           </div>
         </header>
 
-        <main id="main-view" class="flex-1 overflow-x-hidden p-4 md:p-8">
+        <main id="main-view" tabindex="-1" class="flex-1 overflow-x-hidden p-4 md:p-8 focus:outline-none">
           <!-- 라우팅된 화면이 여기에 주입됩니다. -->
         </main>
       </div>
