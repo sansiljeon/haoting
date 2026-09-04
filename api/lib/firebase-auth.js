@@ -1,5 +1,4 @@
-import { initializeApp, getApps, cert } from "firebase-admin/app";
-import { getAuth } from "firebase-admin/auth";
+import { createVerify } from "node:crypto";
 
 // Verifies the caller is a logged-in Firebase user (real authorization boundary
 // for /api/*). INTERNAL_API_TOKEN alone used to be the only gate, but that token
@@ -7,44 +6,74 @@ import { getAuth } from "firebase-admin/auth";
 // it can only ever be a bot filter, never proof of who's calling. This checks the
 // Firebase ID token the already-logged-in frontend sends instead.
 //
-// Reuses the same Google service account credential as Calendar/Sheets sync
-// (GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY) — the admin
-// app's credential only needs to be *a* valid Google service account (it's used
-// for Admin API calls, not for the ID-token signature check itself, which always
-// verifies against Google's public certs). FIREBASE_PROJECT_ID must match the
-// Firebase project in public/firebase-config.js so the token's audience matches.
-let cachedApp;
+// This verifies the token by hand (Google's public certs + RS256 signature check)
+// per https://firebase.google.com/docs/auth/admin/verify-id-tokens#verify_id_tokens_using_a_third-party_jwt_library
+// instead of using the firebase-admin SDK: firebase-admin's ID-token path pulls in
+// jwks-rsa, whose "jose" dependency ships ESM-only and gets required() at import
+// time — that crashes every /api/* call on Vercel's Node runtime with
+// ERR_REQUIRE_ESM. No service-account credential is needed here; verification only
+// ever checks the signature against Google's own public certs.
+const GOOGLE_CERTS_URL = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com";
+const DEFAULT_CERTS_TTL_MS = 60 * 60 * 1000;
+const CLOCK_SKEW_SECONDS = 60;
 
-function getFirebaseAdminApp() {
-  if (cachedApp) return cachedApp;
+let certsCache = null; // { certs: Record<kid, pem>, expiresAt: number }
+
+async function getGoogleCerts() {
+  if (certsCache && certsCache.expiresAt > Date.now()) return certsCache.certs;
+  const res = await fetch(GOOGLE_CERTS_URL);
+  if (!res.ok) throw new Error(`failed to fetch Google certs: ${res.status}`);
+  const certs = await res.json();
+  const maxAgeMatch = /max-age=(\d+)/.exec(res.headers.get("cache-control") || "");
+  const ttlMs = maxAgeMatch ? Number(maxAgeMatch[1]) * 1000 : DEFAULT_CERTS_TTL_MS;
+  certsCache = { certs, expiresAt: Date.now() + ttlMs };
+  return certs;
+}
+
+async function verifyFirebaseIdToken(idToken) {
   const projectId = process.env.FIREBASE_PROJECT_ID;
-  const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const rawKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
-  if (!projectId || !clientEmail || !rawKey) return null;
-  const existing = getApps().find((app) => app.name === "haoting-admin-auth");
-  cachedApp =
-    existing ||
-    initializeApp(
-      { credential: cert({ projectId, clientEmail, privateKey: rawKey.replace(/\\n/g, "\n") }), projectId },
-      "haoting-admin-auth"
-    );
-  return cachedApp;
+  const parts = idToken.split(".");
+  if (parts.length !== 3) throw new Error("malformed token");
+  const [headerB64, payloadB64, signatureB64] = parts;
+  const header = JSON.parse(Buffer.from(headerB64, "base64url").toString("utf8"));
+  const payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
+
+  if (header.alg !== "RS256") throw new Error("unexpected alg");
+  if (!header.kid) throw new Error("missing kid");
+
+  const certs = await getGoogleCerts();
+  const cert = certs[header.kid];
+  if (!cert) throw new Error("unknown key id");
+
+  const verifier = createVerify("RSA-SHA256");
+  verifier.update(`${headerB64}.${payloadB64}`);
+  const validSignature = verifier.verify(cert, Buffer.from(signatureB64, "base64url"));
+  if (!validSignature) throw new Error("invalid signature");
+
+  const now = Math.floor(Date.now() / 1000);
+  if (typeof payload.exp !== "number" || payload.exp <= now) throw new Error("token expired");
+  if (typeof payload.iat !== "number" || payload.iat > now + CLOCK_SKEW_SECONDS) throw new Error("token issued in the future");
+  if (payload.aud !== projectId) throw new Error("audience mismatch");
+  if (payload.iss !== `https://securetoken.google.com/${projectId}`) throw new Error("issuer mismatch");
+  if (typeof payload.sub !== "string" || !payload.sub) throw new Error("missing subject");
+  if (typeof payload.auth_time !== "number" || payload.auth_time > now + CLOCK_SKEW_SECONDS) {
+    throw new Error("invalid auth_time");
+  }
+
+  return { ...payload, uid: payload.sub };
 }
 
 export function isFirebaseAuthConfigured() {
-  return Boolean(
-    process.env.FIREBASE_PROJECT_ID && process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL && process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY
-  );
+  return Boolean(process.env.FIREBASE_PROJECT_ID);
 }
 
 // Returns true and continues (attaching the decoded token as req.firebaseUser) if
-// authorized; sends 401 and returns false otherwise. Fails closed (401, not skip)
+// authorized; sends 401 and returns false otherwise. Fails closed (500, not skip)
 // when FIREBASE_PROJECT_ID itself hasn't been set — unlike requireInternalToken's
 // dev-convenience fail-open, an unconfigured auth check must never mean "allow
 // everyone", since this is the only real access-control boundary /api/* has.
 export async function requireFirebaseAuth(req, res) {
-  const app = getFirebaseAdminApp();
-  if (!app) {
+  if (!isFirebaseAuthConfigured()) {
     res.status(500).json({ error: "server auth not configured" });
     return false;
   }
@@ -55,7 +84,7 @@ export async function requireFirebaseAuth(req, res) {
     return false;
   }
   try {
-    req.firebaseUser = await getAuth(app).verifyIdToken(match[1]);
+    req.firebaseUser = await verifyFirebaseIdToken(match[1]);
     return true;
   } catch (err) {
     res.status(401).json({ error: "unauthorized" });
