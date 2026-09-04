@@ -8,7 +8,7 @@
     "test": "vitest run"
   },
   "engines": {
-    "node": "20.x"
+    "node": "24.x"
   },
   "dependencies": {
     "firebase-admin": "^14.3.0",
