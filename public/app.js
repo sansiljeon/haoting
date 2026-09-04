@@ -56,9 +56,6 @@
 [수업 안내 - 총 [총 회차]회차 중 [당 수업 회차]회]
 일정: [수업 일정]
 
-⚠️ 장소 관련 안내
-센터 대관 상황에 따라 당일 수업 장소가 변경될 수 있습니다. 장소 변경 시 수업 시작 전 미리 연락드릴게요! 혹시 별도의 연락이 없더라도 당황하지 마시고 사무실로 와주시면 바로 안내해 드리겠습니다.
-
 이번 주도 의미 있는 시간이 되도록 정성껏 준비하겠습니다. 곧 뵙겠습니다! 😊
 수업 일정에 변경이 필요하신 경우, 언제든지 편하게 연락주세요! 😊`;
 
@@ -126,7 +123,7 @@
   }
 
   const state = {
-    route: "students", // "counseling" | "students" | "sales" | "study"
+    route: "students", // "counseling" | "students" | "sales" | "homework" | "study"
     students: [],
     isStudentsLoading: true, // Firestore 첫 스냅샷 도착 전까지 true
     counselingRecords: [],
@@ -164,12 +161,22 @@
     pendingCounselingLinkId: null, // 상담 상세에서 학생 등록으로 넘어온 경우 연결할 상담 기록 id
     refundStudentId: null, // 환불 내역서 모달에 표시 중인 학생 id
     refundDraft: null, // 환불 내역서 작성 중인 임시 draft
-    /** 학습·숙제 기록 (구글 스프레드시트가 원본, /api/study-records 를 통해 fetch) */
+    /** 숙제 기록 (구글 스프레드시트가 원본, /api/homework-records 를 통해 fetch) */
+    homeworkRecords: [],
+    homeworkRecordsLoading: false,
+    homeworkRecordsLoadedOnce: false,
+    homeworkRecordsError: null,
+    homeworkStudentFilter: "all", // "all" | studentName
+    homeworkClassTypeFilter: "all", // "all" | "일반 회화반" | "자격증반"
+    homeworkKeyword: "",
+    homeworkDraft: emptyHomeworkDraft(),
+    homeworkRecordsSkipped: false, // true면 서버에 구글 시트 연동이 아직 설정되지 않은 상태
+    /** 학습 기록 (구글 스프레드시트가 원본, /api/study-records 를 통해 fetch) */
     studyRecords: [],
     studyRecordsLoading: false,
     studyRecordsLoadedOnce: false,
     studyRecordsError: null,
-    studyStudentFilter: "all", // "all" | studentId
+    studyStudentFilter: "all", // "all" | studentName
     studyClassTypeFilter: "all", // "all" | "일반 회화반" | "자격증반"
     studyKeyword: "",
     studyDraft: emptyStudyDraft(),
@@ -190,6 +197,27 @@
   let counselingSearchComposing = false;
   let studyFormSubmitting = false;
   let studySearchComposing = false;
+  let homeworkFormSubmitting = false;
+  let homeworkSearchComposing = false;
+
+  function emptyHomeworkDraft() {
+    return {
+      id: "",
+      studentId: "",
+      studentName: "",
+      classDate: "",
+      registeredSessions: "",
+      classType: "",
+      content: "",
+      homeworkText: "",
+      submitted: "미제출",
+      checked: "미확인",
+      feedback: "",
+      recheck: "",
+      nextCheckDate: "",
+      memo: "",
+    };
+  }
 
   function emptyStudyDraft() {
     return {
@@ -199,13 +227,16 @@
       classDate: "",
       registeredSessions: "",
       classType: "",
+      attendance: "",
+      topic: "",
+      goal: "",
       content: "",
       comprehension: "",
       participation: "",
+      strengths: "",
       improvement: "",
-      homeworkSubmitted: "미제출",
-      homeworkChecked: "미확인",
-      feedback: "",
+      nextPlan: "",
+      teacherMemo: "",
     };
   }
 
@@ -597,7 +628,10 @@
     const list = Array.isArray(groups) ? groups : getStudentPaymentGroups(student);
     if (list.length === 0) return "";
     const selectedId = state.selectedPaymentGroupByStudent[student.id];
-    return list.some((group) => group.id === selectedId) ? selectedId : list[0].id;
+    if (list.some((group) => group.id === selectedId)) return selectedId;
+    // groups are ordered oldest → newest (initial payment, then renewals by date), so with
+    // no explicit selection yet, default to the most recent one.
+    return list[list.length - 1].id;
   }
 
   function selectStudentPaymentGroup(studentId, groupId) {
@@ -914,10 +948,15 @@
     }
   }
 
-  function internalApiHeaders() {
+  // Real authorization for /api/* is the Firebase ID token (server verifies it);
+  // x-internal-api-token is only a secondary bot filter layered on top, since the
+  // token itself lives in a publicly-served static file and can't be a secret.
+  async function internalApiHeaders() {
     const token = (typeof window !== "undefined" && window.HAOTING_API_TOKEN) || "";
     const headers = { "Content-Type": "application/json" };
     if (token) headers["x-internal-api-token"] = token;
+    const idToken = window.HaotingDB && (await window.HaotingDB.getIdToken());
+    if (idToken) headers["Authorization"] = `Bearer ${idToken}`;
     return headers;
   }
 
@@ -951,7 +990,7 @@
       try {
         const res = await fetch("/api/calendar/sync-session", {
           method: "DELETE",
-          headers: internalApiHeaders(),
+          headers: await internalApiHeaders(),
           body: JSON.stringify({ calendarEventId: previousCalendarEventId }),
         });
         if (!res.ok) throw new Error(`delete failed ${res.status}`);
@@ -965,7 +1004,7 @@
     try {
       const res = await fetch("/api/calendar/sync-session", {
         method: "POST",
-        headers: internalApiHeaders(),
+        headers: await internalApiHeaders(),
         body: JSON.stringify({
           calendarEventId: previousCalendarEventId || undefined,
           studentName: student.name,
@@ -2053,6 +2092,9 @@
     });
     // Sheets has no realtime push like Firestore's onSnapshot, so fetch once per
     // route-entry here (not inside render(), which fires on nearly every input).
+    if (route === "homework" && !state.homeworkRecordsLoadedOnce && !state.homeworkRecordsLoading) {
+      loadHomeworkRecords();
+    }
     if (route === "study" && !state.studyRecordsLoadedOnce && !state.studyRecordsLoading) {
       loadStudyRecords();
     }
@@ -2072,6 +2114,9 @@
     } else if (state.route === "counseling") {
       main.innerHTML = renderCounselingView();
       bindCounselingViewEvents();
+    } else if (state.route === "homework") {
+      main.innerHTML = renderHomeworkView();
+      bindHomeworkViewEvents();
     } else if (state.route === "study") {
       main.innerHTML = renderStudyView();
       bindStudyViewEvents();
@@ -2776,106 +2821,21 @@
   }
 
   /* ----------------------------------------------------------
-   * 5-0. 학습·숙제 기록 화면 (구글 스프레드시트 연동 — 시트가 원본 데이터)
+   * 5-0. 숙제·학습 기록 화면 (구글 스프레드시트 연동 — 시트가 원본 데이터)
+   * 두 선생님이 이미 쓰시던 시트의 "숙제 기록"/"학습 기록" 탭 구조를 그대로 따라가는
+   * 독립된 두 화면으로 구성됩니다.
    * ---------------------------------------------------------- */
   const STUDY_CLASS_TYPES = ["일반 회화반", "자격증반"];
   const STUDY_REGISTERED_SESSION_OPTIONS = [8, 16, 24];
-  const STUDY_LEVEL_OPTIONS = ["상", "중", "하"];
+  const STUDY_LEVEL_OPTIONS = ["좋음", "보통", "부족"];
+  const STUDY_ATTENDANCE_OPTIONS = ["출석", "결석", "보강"];
+  const HOMEWORK_SUBMITTED_OPTIONS = ["완료", "미제출"];
+  const HOMEWORK_CHECKED_OPTIONS = ["확인 완료", "미확인", "재제출 필요"];
+  const HOMEWORK_RECHECK_OPTIONS = ["필요", "불필요"];
 
-  async function loadStudyRecords() {
-    state.studyRecordsLoading = true;
-    state.studyRecordsError = null;
-    render();
-    try {
-      const res = await fetch("/api/study-records", { headers: internalApiHeaders() });
-      if (!res.ok) throw new Error(`load failed ${res.status}`);
-      const data = await res.json();
-      state.studyRecords = Array.isArray(data.records) ? data.records : [];
-      state.studyRecordsSkipped = !!data.skipped;
-      state.studyRecordsLoadedOnce = true;
-    } catch (err) {
-      console.error("[loadStudyRecords]", err);
-      state.studyRecordsError = "학습·숙제 기록을 불러오지 못했습니다. 잠시 후 새로고침해 주세요.";
-    } finally {
-      state.studyRecordsLoading = false;
-      render();
-    }
-  }
-
-  async function createStudyRecord(payload) {
-    const res = await fetch("/api/study-records", {
-      method: "POST",
-      headers: internalApiHeaders(),
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || `create failed ${res.status}`);
-    }
-    return res.json();
-  }
-
-  async function updateStudyRecord(id, payload) {
-    const res = await fetch(`/api/study-records/${encodeURIComponent(id)}`, {
-      method: "PATCH",
-      headers: internalApiHeaders(),
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || `update failed ${res.status}`);
-    }
-    return res.json();
-  }
-
-  async function deleteStudyRecord(id) {
-    const res = await fetch(`/api/study-records/${encodeURIComponent(id)}`, {
-      method: "DELETE",
-      headers: internalApiHeaders(),
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || `delete failed ${res.status}`);
-    }
-    return res.json();
-  }
-
-  function studyRecordToDraft(record) {
-    return {
-      id: record.id || "",
-      studentId: record.studentId || "",
-      studentName: record.studentName || "",
-      classDate: record.classDate || "",
-      registeredSessions: record.registeredSessions || "",
-      classType: record.classType || "",
-      content: record.content || "",
-      comprehension: record.comprehension || "",
-      participation: record.participation || "",
-      improvement: record.improvement || "",
-      homeworkSubmitted: record.homeworkSubmitted || "미제출",
-      homeworkChecked: record.homeworkChecked || "미확인",
-      feedback: record.feedback || "",
-    };
-  }
-
-  function filterStudyRecords(records) {
-    const keyword = state.studyKeyword.trim().toLowerCase();
-    return records.filter((r) => {
-      if (state.studyStudentFilter !== "all" && r.studentId !== state.studyStudentFilter) return false;
-      if (state.studyClassTypeFilter !== "all" && r.classType !== state.studyClassTypeFilter) return false;
-      if (keyword) {
-        const haystack = [r.studentName, r.content, r.improvement, r.feedback].join(" ").toLowerCase();
-        if (!haystack.includes(keyword)) return false;
-      }
-      return true;
-    });
-  }
-
-  function sortStudyRecordsByDateDesc(records) {
-    return records.slice().sort((a, b) => String(b.classDate || "").localeCompare(String(a.classDate || "")));
-  }
-
-  function renderStudySelectOptions(currentId) {
+  // Shared by both the homework and study views below (and by any future
+  // sheet-backed record view) — kept name-neutral rather than tied to one feature.
+  function renderStudentSelectOptions(currentId) {
     const sorted = state.students
       .slice()
       .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ko"));
@@ -2890,7 +2850,7 @@
     return options.join("");
   }
 
-  function renderStudySelect(id, name, options, currentValue, required) {
+  function renderSelectField(id, name, options, currentValue, required) {
     const optionsHtml = options
       .map(
         (opt) =>
@@ -2905,10 +2865,142 @@
     `;
   }
 
-  function renderStudyView() {
-    const d = state.studyDraft;
+  function findStudentByName(name) {
+    return state.students.find((s) => s.name === name) || null;
+  }
+
+  function findStudentById(id) {
+    return state.students.find((s) => s.id === id) || null;
+  }
+
+  function sortRecordsByDateDesc(records) {
+    return records.slice().sort((a, b) => String(b.classDate || "").localeCompare(String(a.classDate || "")));
+  }
+
+  // Banner shown above both the homework and study tables — identical markup for
+  // both, parameterized only by which sheet-sync state it's reporting on.
+  function renderSheetSyncBanner({ skipped, error }) {
+    if (skipped) {
+      return `<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <i class="fa-solid fa-triangle-exclamation mr-1.5"></i>
+          구글 스프레드시트 연동이 아직 설정되지 않았습니다. README 의 "Google Calendar / Sheets 연동 설정" 안내를 참고해 환경변수를 등록해 주세요.
+        </div>`;
+    }
+    if (error) {
+      return `<div class="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <i class="fa-solid fa-circle-exclamation mr-1.5"></i>${escapeHtml(error)}
+          </div>`;
+    }
+    return `<div class="mb-4 text-xs text-slate-500">
+            <i class="fa-solid fa-circle-info mr-1"></i>
+            실시간 반영이 아니므로, 다른 화면/기기에서 변경한 내용은 새로고침 버튼을 눌러야 보입니다.
+          </div>`;
+  }
+
+  // Thin per-feature fetch wrappers over the shared CRUD shape (list/create/update/
+  // delete against one REST base path) — the network/error-handling logic used to be
+  // hand-copied per feature; only the base path differs now.
+  function createRecordApi(basePath) {
+    async function throwOnError(res, verb) {
+      if (res.ok) return res.json();
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `${verb} failed ${res.status}`);
+    }
+    return {
+      list: async () => fetch(basePath, { headers: await internalApiHeaders() }),
+      create: async (payload) =>
+        fetch(basePath, { method: "POST", headers: await internalApiHeaders(), body: JSON.stringify(payload) }).then(
+          (res) => throwOnError(res, "create")
+        ),
+      update: async (id, payload) =>
+        fetch(`${basePath}/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          headers: await internalApiHeaders(),
+          body: JSON.stringify(payload),
+        }).then((res) => throwOnError(res, "update")),
+      remove: async (id) =>
+        fetch(`${basePath}/${encodeURIComponent(id)}`, { method: "DELETE", headers: await internalApiHeaders() }).then(
+          (res) => throwOnError(res, "delete")
+        ),
+    };
+  }
+
+  const homeworkApi = createRecordApi("/api/homework-records");
+  const studyApi = createRecordApi("/api/study-records");
+
+  /* ----------------------------------------------------------
+   * 5-0a. 숙제 기록 화면
+   * ---------------------------------------------------------- */
+
+  async function loadHomeworkRecords() {
+    state.homeworkRecordsLoading = true;
+    state.homeworkRecordsError = null;
+    render();
+    try {
+      const res = await homeworkApi.list();
+      if (!res.ok) throw new Error(`load failed ${res.status}`);
+      const data = await res.json();
+      state.homeworkRecords = Array.isArray(data.records) ? data.records : [];
+      state.homeworkRecordsSkipped = !!data.skipped;
+      state.homeworkRecordsLoadedOnce = true;
+    } catch (err) {
+      console.error("[loadHomeworkRecords]", err);
+      state.homeworkRecordsError = "숙제 기록을 불러오지 못했습니다. 잠시 후 새로고침해 주세요.";
+    } finally {
+      state.homeworkRecordsLoading = false;
+      render();
+    }
+  }
+
+  function createHomeworkRecord(payload) {
+    return homeworkApi.create(payload);
+  }
+
+  function updateHomeworkRecord(id, payload) {
+    return homeworkApi.update(id, payload);
+  }
+
+  function deleteHomeworkRecord(id) {
+    return homeworkApi.remove(id);
+  }
+
+  function homeworkRecordToDraft(record) {
+    const student = findStudentByName(record.studentName);
+    return {
+      id: record.id || "",
+      studentId: student ? student.id : "",
+      studentName: record.studentName || "",
+      classDate: record.classDate || "",
+      registeredSessions: record.registeredSessions || "",
+      classType: record.classType || "",
+      content: record.content || "",
+      homeworkText: record.homeworkText || "",
+      submitted: record.submitted || "미제출",
+      checked: record.checked || "미확인",
+      feedback: record.feedback || "",
+      recheck: record.recheck || "",
+      nextCheckDate: record.nextCheckDate || "",
+      memo: record.memo || "",
+    };
+  }
+
+  function filterHomeworkRecords(records) {
+    const keyword = state.homeworkKeyword.trim().toLowerCase();
+    return records.filter((r) => {
+      if (state.homeworkStudentFilter !== "all" && r.studentName !== state.homeworkStudentFilter) return false;
+      if (state.homeworkClassTypeFilter !== "all" && r.classType !== state.homeworkClassTypeFilter) return false;
+      if (keyword) {
+        const haystack = [r.studentName, r.content, r.homeworkText, r.feedback, r.memo].join(" ").toLowerCase();
+        if (!haystack.includes(keyword)) return false;
+      }
+      return true;
+    });
+  }
+
+  function renderHomeworkView() {
+    const d = state.homeworkDraft;
     const isEditing = !!d.id;
-    const records = sortStudyRecordsByDateDesc(filterStudyRecords(state.studyRecords));
+    const records = sortRecordsByDateDesc(filterHomeworkRecords(state.homeworkRecords));
 
     const studentFilterOptions = ['<option value="all">전체 학생</option>']
       .concat(
@@ -2917,9 +3009,443 @@
           .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ko"))
           .map(
             (s) =>
-              `<option value="${escapeHtml(s.id)}"${state.studyStudentFilter === s.id ? " selected" : ""}>${escapeHtml(
-                s.name || "이름 없음"
-              )}</option>`
+              `<option value="${escapeHtml(s.name || "")}"${
+                state.homeworkStudentFilter === s.name ? " selected" : ""
+              }>${escapeHtml(s.name || "이름 없음")}</option>`
+          )
+      )
+      .join("");
+
+    const classTypeFilterOptions = ['<option value="all">전체 반</option>']
+      .concat(
+        STUDY_CLASS_TYPES.map(
+          (t) =>
+            `<option value="${escapeHtml(t)}"${state.homeworkClassTypeFilter === t ? " selected" : ""}>${escapeHtml(t)}</option>`
+        )
+      )
+      .join("");
+
+    const banner = renderSheetSyncBanner({ skipped: state.homeworkRecordsSkipped, error: state.homeworkRecordsError });
+
+    const rowsHtml = state.homeworkRecordsLoading
+      ? `<tr><td colspan="7" class="px-4 py-12 text-center text-sm text-slate-500"><i class="fa-solid fa-rotate fa-spin mr-2"></i>불러오는 중…</td></tr>`
+      : records.length === 0
+        ? `<tr><td colspan="7" class="px-4 py-12 text-center text-sm text-slate-500">등록된 숙제 기록이 없습니다. 아래에서 새로 추가해 보세요.</td></tr>`
+        : records
+            .map((r) => {
+              const submitted = r.submitted === "완료";
+              const checked = r.checked === "확인 완료";
+              return `
+              <tr>
+                <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-600 md:px-6">${formatDate(r.classDate)}</td>
+                <td class="px-4 py-3 text-sm font-medium text-slate-900 md:px-6">${escapeHtml(r.studentName || "-")}</td>
+                <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-600 md:px-6">${escapeHtml(r.classType || "-")}</td>
+                <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-600 md:px-6">${escapeHtml(
+                  r.registeredSessions ? `${String(r.registeredSessions).replace(/회$/, "")}회` : "-"
+                )}</td>
+                <td class="whitespace-nowrap px-4 py-3 md:px-6">
+                  <span class="inline-flex items-center gap-1 rounded-full ${
+                    submitted ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"
+                  } px-2.5 py-1 text-[11px] font-medium">${escapeHtml(r.submitted || "미제출")}</span>
+                  <span class="ml-1 inline-flex items-center gap-1 rounded-full ${
+                    checked ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"
+                  } px-2.5 py-1 text-[11px] font-medium">${escapeHtml(r.checked || "미확인")}</span>
+                </td>
+                <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-600 md:px-6">${escapeHtml(r.recheck || "-")}</td>
+                <td class="whitespace-nowrap px-4 py-3 text-right md:px-6">
+                  <button type="button" class="homework-edit inline-flex h-11 w-11 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-brand-600" data-id="${escapeHtml(
+                    r.id
+                  )}" title="수정" aria-label="수정">
+                    <i class="fa-solid fa-pen-to-square"></i>
+                  </button>
+                  <button type="button" class="homework-delete inline-flex h-11 w-11 items-center justify-center rounded-md text-slate-500 transition hover:bg-red-50 hover:text-red-600" data-id="${escapeHtml(
+                    r.id
+                  )}" title="삭제" aria-label="삭제">
+                    <i class="fa-solid fa-trash"></i>
+                  </button>
+                </td>
+              </tr>`;
+            })
+            .join("");
+
+    return `
+      <section class="mb-6 flex flex-col gap-1 md:flex-row md:items-end md:justify-between">
+        <div>
+          <h2 class="text-xl font-semibold text-slate-900 md:text-2xl">숙제 기록</h2>
+          <p class="mt-1 text-sm text-slate-500">
+            수업 회차별 숙제 제출·확인 현황을 기록합니다. 이 화면은 연결된 구글 스프레드시트를 직접 읽고 씁니다.
+          </p>
+        </div>
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <button type="button" id="homework-refresh-btn" class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50">
+            <i class="fa-solid fa-rotate${state.homeworkRecordsLoading ? " fa-spin" : ""}"></i>새로고침
+          </button>
+        </div>
+      </section>
+
+      ${banner}
+
+      <section class="mb-6 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <label class="sr-only" for="homework-student-filter">학생 필터</label>
+        <select id="homework-student-filter" class="form-input min-w-[180px] text-sm">${studentFilterOptions}</select>
+        <label class="sr-only" for="homework-class-type-filter">반 구분 필터</label>
+        <select id="homework-class-type-filter" class="form-input min-w-[160px] text-sm">${classTypeFilterOptions}</select>
+        <label class="sr-only" for="homework-search-input">검색</label>
+        <input id="homework-search-input" type="text" class="form-input min-w-[220px] text-sm" placeholder="수업 내용·숙제·피드백·메모 검색" value="${escapeHtml(
+          state.homeworkKeyword
+        )}" />
+      </section>
+
+      <section class="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-6">
+        <form id="homework-form" novalidate>
+          <div class="flex items-center justify-between">
+            <h3 class="text-sm font-semibold text-slate-900">${isEditing ? "기록 수정" : "새 기록 추가"}</h3>
+            ${isEditing ? `<button type="button" id="homework-cancel-edit" class="text-xs text-slate-500 hover:text-slate-600">수정 취소</button>` : ""}
+          </div>
+          <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-student">학생<span class="text-red-500">*</span></label>
+              <select id="hf-student" name="studentId" class="form-input" required>${renderStudentSelectOptions(d.studentId)}</select>
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-class-date">수업 날짜<span class="text-red-500">*</span></label>
+              <input id="hf-class-date" name="classDate" type="date" class="form-input" value="${escapeHtml(d.classDate || todayISO())}" required />
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-registered-sessions">등록 회차</label>
+              ${renderSelectField("hf-registered-sessions", "registeredSessions", STUDY_REGISTERED_SESSION_OPTIONS, d.registeredSessions ? Number(d.registeredSessions) : "", false)}
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-class-type">반 구분</label>
+              ${renderSelectField("hf-class-type", "classType", STUDY_CLASS_TYPES, d.classType, false)}
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-submitted">제출 상태</label>
+              ${renderSelectField("hf-submitted", "submitted", HOMEWORK_SUBMITTED_OPTIONS, d.submitted || "미제출", false)}
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-checked">확인 상태</label>
+              ${renderSelectField("hf-checked", "checked", HOMEWORK_CHECKED_OPTIONS, d.checked || "미확인", false)}
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-recheck">재확인</label>
+              ${renderSelectField("hf-recheck", "recheck", HOMEWORK_RECHECK_OPTIONS, d.recheck, false)}
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-next-check-date">다음 확인일</label>
+              <input id="hf-next-check-date" name="nextCheckDate" type="date" class="form-input" value="${escapeHtml(d.nextCheckDate)}" />
+            </div>
+          </div>
+          <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-content">수업 내용</label>
+              <textarea id="hf-content" name="content" rows="3" class="form-input">${escapeHtml(d.content)}</textarea>
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-homework-text">숙제 작성란</label>
+              <textarea id="hf-homework-text" name="homeworkText" rows="3" class="form-input">${escapeHtml(d.homeworkText)}</textarea>
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-feedback">피드백</label>
+              <textarea id="hf-feedback" name="feedback" rows="3" class="form-input">${escapeHtml(d.feedback)}</textarea>
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-memo">메모</label>
+              <textarea id="hf-memo" name="memo" rows="3" class="form-input">${escapeHtml(d.memo)}</textarea>
+            </div>
+          </div>
+          <div class="mt-4 flex justify-end">
+            <button type="submit" id="homework-submit" class="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-700">
+              ${isEditing ? "수정 저장" : "기록 추가"}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+        <table class="min-w-full divide-y divide-slate-200">
+          <thead class="bg-slate-50">
+            <tr>
+              <th class="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500 md:px-6">수업 날짜</th>
+              <th class="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500 md:px-6">학생</th>
+              <th class="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500 md:px-6">반 구분</th>
+              <th class="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500 md:px-6">등록 회차</th>
+              <th class="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500 md:px-6">제출·확인</th>
+              <th class="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500 md:px-6">재확인</th>
+              <th class="whitespace-nowrap px-4 py-3 text-right text-xs font-medium uppercase tracking-wide text-slate-500 md:px-6">관리</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            ${rowsHtml}
+          </tbody>
+        </table>
+      </section>
+    `;
+  }
+
+  function collectHomeworkFieldsFromForm(form) {
+    const val = (name) => String(form.elements[name]?.value ?? "").trim();
+    return {
+      studentId: val("studentId"),
+      classDate: val("classDate"),
+      registeredSessions: val("registeredSessions"),
+      classType: val("classType"),
+      content: val("content"),
+      homeworkText: val("homeworkText"),
+      submitted: val("submitted") || "미제출",
+      checked: val("checked") || "미확인",
+      feedback: val("feedback"),
+      recheck: val("recheck"),
+      nextCheckDate: val("nextCheckDate"),
+      memo: val("memo"),
+    };
+  }
+
+  async function handleHomeworkFormSubmit(e) {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const fields = collectHomeworkFieldsFromForm(form);
+
+    if (!fields.studentId || !fields.classDate) {
+      showToast("학생과 수업 날짜는 필수입니다.");
+      if (!fields.studentId) form.elements.studentId?.focus();
+      else form.elements.classDate?.focus();
+      return;
+    }
+
+    if (homeworkFormSubmitting) {
+      showToast("저장 처리 중입니다. 잠시만 기다려 주세요.");
+      return;
+    }
+    homeworkFormSubmitting = true;
+    const submitBtn = document.getElementById("homework-submit");
+    if (submitBtn) submitBtn.disabled = true;
+
+    const editingId = state.homeworkDraft.id;
+    const student = findStudentById(fields.studentId);
+    const { studentId, ...rest } = fields;
+    const payload = Object.assign({}, rest, { studentName: student ? student.name : "" });
+
+    try {
+      if (editingId) {
+        await updateHomeworkRecord(editingId, payload);
+        showToast("숙제 기록이 수정되었습니다.");
+      } else {
+        await createHomeworkRecord(payload);
+        showToast("숙제 기록이 추가되었습니다.");
+      }
+      state.homeworkDraft = emptyHomeworkDraft();
+      await loadHomeworkRecords();
+    } catch (err) {
+      console.error("[handleHomeworkFormSubmit]", err);
+      showToast("저장에 실패했습니다. 구글 시트 연동 설정과 네트워크를 확인해 주세요.");
+    } finally {
+      homeworkFormSubmitting = false;
+      if (submitBtn) submitBtn.disabled = false;
+      render();
+    }
+  }
+
+  function bindHomeworkViewEvents() {
+    const refreshBtn = document.getElementById("homework-refresh-btn");
+    if (refreshBtn) {
+      refreshBtn.addEventListener("click", () => loadHomeworkRecords());
+    }
+
+    const studentFilter = document.getElementById("homework-student-filter");
+    if (studentFilter) {
+      studentFilter.addEventListener("change", () => {
+        state.homeworkStudentFilter = String(studentFilter.value || "all");
+        render();
+      });
+    }
+
+    const classTypeFilter = document.getElementById("homework-class-type-filter");
+    if (classTypeFilter) {
+      classTypeFilter.addEventListener("change", () => {
+        state.homeworkClassTypeFilter = String(classTypeFilter.value || "all");
+        render();
+      });
+    }
+
+    const searchInput = document.getElementById("homework-search-input");
+    if (searchInput) {
+      searchInput.addEventListener("compositionstart", () => {
+        homeworkSearchComposing = true;
+      });
+      searchInput.addEventListener("compositionend", (e) => {
+        homeworkSearchComposing = false;
+        state.homeworkKeyword = e.target.value;
+        render();
+      });
+      searchInput.addEventListener("input", (e) => {
+        state.homeworkKeyword = e.target.value;
+        if (homeworkSearchComposing) return;
+        const cursorPos = e.target.selectionStart;
+        render();
+        const next = document.getElementById("homework-search-input");
+        if (next) {
+          next.focus();
+          try {
+            next.setSelectionRange(cursorPos, cursorPos);
+          } catch (_) {}
+        }
+      });
+    }
+
+    const studentSelect = document.getElementById("hf-student");
+    if (studentSelect) {
+      studentSelect.addEventListener("change", () => {
+        const student = findStudentById(studentSelect.value);
+        const registeredSessionsInput = document.getElementById("hf-registered-sessions");
+        if (student && registeredSessionsInput && STUDY_REGISTERED_SESSION_OPTIONS.includes(Number(student.registeredSessions))) {
+          registeredSessionsInput.value = String(student.registeredSessions);
+        }
+      });
+    }
+
+    const cancelBtn = document.getElementById("homework-cancel-edit");
+    if (cancelBtn) {
+      cancelBtn.addEventListener("click", () => {
+        state.homeworkDraft = emptyHomeworkDraft();
+        render();
+      });
+    }
+
+    document.querySelectorAll(".homework-edit").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-id");
+        const rec = state.homeworkRecords.find((r) => r.id === id);
+        if (!rec) return;
+        state.homeworkDraft = homeworkRecordToDraft(rec);
+        render();
+        document.getElementById("hf-student")?.focus();
+      });
+    });
+
+    document.querySelectorAll(".homework-delete").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-id");
+        const rec = state.homeworkRecords.find((r) => r.id === id);
+        openConfirm({
+          title: "숙제 기록을 삭제할까요?",
+          message: rec && rec.studentName ? `${rec.studentName} 님의 이 기록을 삭제합니다.` : "이 기록을 삭제합니다.",
+          onConfirm: async () => {
+            try {
+              await deleteHomeworkRecord(id);
+              if (state.homeworkDraft.id === id) state.homeworkDraft = emptyHomeworkDraft();
+              showToast("숙제 기록이 삭제되었습니다.");
+              await loadHomeworkRecords();
+            } catch (err) {
+              console.error("[deleteHomeworkRecord]", err);
+              showToast("삭제에 실패했습니다. 잠시 후 다시 시도해 주세요.");
+            }
+          },
+        });
+      });
+    });
+
+    const form = document.getElementById("homework-form");
+    if (form) {
+      form.addEventListener("keydown", (e) => {
+        const target = e.target;
+        const tagName = target && target.tagName ? String(target.tagName).toUpperCase() : "";
+        if (e.key === "Enter" && tagName !== "TEXTAREA") {
+          e.preventDefault();
+        }
+      });
+      form.addEventListener("submit", handleHomeworkFormSubmit);
+    }
+  }
+
+  /* ----------------------------------------------------------
+   * 5-0b. 학습 기록 화면
+   * ---------------------------------------------------------- */
+
+  async function loadStudyRecords() {
+    state.studyRecordsLoading = true;
+    state.studyRecordsError = null;
+    render();
+    try {
+      const res = await studyApi.list();
+      if (!res.ok) throw new Error(`load failed ${res.status}`);
+      const data = await res.json();
+      state.studyRecords = Array.isArray(data.records) ? data.records : [];
+      state.studyRecordsSkipped = !!data.skipped;
+      state.studyRecordsLoadedOnce = true;
+    } catch (err) {
+      console.error("[loadStudyRecords]", err);
+      state.studyRecordsError = "학습 기록을 불러오지 못했습니다. 잠시 후 새로고침해 주세요.";
+    } finally {
+      state.studyRecordsLoading = false;
+      render();
+    }
+  }
+
+  function createStudyRecord(payload) {
+    return studyApi.create(payload);
+  }
+
+  function updateStudyRecord(id, payload) {
+    return studyApi.update(id, payload);
+  }
+
+  function deleteStudyRecord(id) {
+    return studyApi.remove(id);
+  }
+
+  function studyRecordToDraft(record) {
+    const student = findStudentByName(record.studentName);
+    return {
+      id: record.id || "",
+      studentId: student ? student.id : "",
+      studentName: record.studentName || "",
+      classDate: record.classDate || "",
+      registeredSessions: record.registeredSessions || "",
+      classType: record.classType || "",
+      attendance: record.attendance || "",
+      topic: record.topic || "",
+      goal: record.goal || "",
+      content: record.content || "",
+      comprehension: record.comprehension || "",
+      participation: record.participation || "",
+      strengths: record.strengths || "",
+      improvement: record.improvement || "",
+      nextPlan: record.nextPlan || "",
+      teacherMemo: record.teacherMemo || "",
+    };
+  }
+
+  function filterStudyRecords(records) {
+    const keyword = state.studyKeyword.trim().toLowerCase();
+    return records.filter((r) => {
+      if (state.studyStudentFilter !== "all" && r.studentName !== state.studyStudentFilter) return false;
+      if (state.studyClassTypeFilter !== "all" && r.classType !== state.studyClassTypeFilter) return false;
+      if (keyword) {
+        const haystack = [r.studentName, r.topic, r.goal, r.content, r.strengths, r.improvement, r.nextPlan, r.teacherMemo]
+          .join(" ")
+          .toLowerCase();
+        if (!haystack.includes(keyword)) return false;
+      }
+      return true;
+    });
+  }
+
+  function renderStudyView() {
+    const d = state.studyDraft;
+    const isEditing = !!d.id;
+    const records = sortRecordsByDateDesc(filterStudyRecords(state.studyRecords));
+
+    const studentFilterOptions = ['<option value="all">전체 학생</option>']
+      .concat(
+        state.students
+          .slice()
+          .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ko"))
+          .map(
+            (s) =>
+              `<option value="${escapeHtml(s.name || "")}"${
+                state.studyStudentFilter === s.name ? " selected" : ""
+              }>${escapeHtml(s.name || "이름 없음")}</option>`
           )
       )
       .join("");
@@ -2932,47 +3458,26 @@
       )
       .join("");
 
-    const banner = state.studyRecordsSkipped
-      ? `<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <i class="fa-solid fa-triangle-exclamation mr-1.5"></i>
-          구글 스프레드시트 연동이 아직 설정되지 않았습니다. README 의 "Google Calendar / Sheets 연동 설정" 안내를 참고해 환경변수를 등록해 주세요.
-        </div>`
-      : state.studyRecordsError
-        ? `<div class="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            <i class="fa-solid fa-circle-exclamation mr-1.5"></i>${escapeHtml(state.studyRecordsError)}
-          </div>`
-        : `<div class="mb-4 text-xs text-slate-500">
-            <i class="fa-solid fa-circle-info mr-1"></i>
-            실시간 반영이 아니므로, 다른 화면/기기에서 변경한 내용은 새로고침 버튼을 눌러야 보입니다.
-          </div>`;
+    const banner = renderSheetSyncBanner({ skipped: state.studyRecordsSkipped, error: state.studyRecordsError });
 
     const rowsHtml = state.studyRecordsLoading
       ? `<tr><td colspan="7" class="px-4 py-12 text-center text-sm text-slate-500"><i class="fa-solid fa-rotate fa-spin mr-2"></i>불러오는 중…</td></tr>`
       : records.length === 0
-        ? `<tr><td colspan="7" class="px-4 py-12 text-center text-sm text-slate-500">등록된 학습·숙제 기록이 없습니다. 아래에서 새로 추가해 보세요.</td></tr>`
+        ? `<tr><td colspan="7" class="px-4 py-12 text-center text-sm text-slate-500">등록된 학습 기록이 없습니다. 아래에서 새로 추가해 보세요.</td></tr>`
         : records
             .map((r) => {
-              const submitted = r.homeworkSubmitted === "제출";
-              const checked = r.homeworkChecked === "확인완료";
               return `
               <tr>
                 <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-600 md:px-6">${formatDate(r.classDate)}</td>
                 <td class="px-4 py-3 text-sm font-medium text-slate-900 md:px-6">${escapeHtml(r.studentName || "-")}</td>
                 <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-600 md:px-6">${escapeHtml(r.classType || "-")}</td>
                 <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-600 md:px-6">${escapeHtml(
-                  r.registeredSessions ? `${r.registeredSessions}회` : "-"
+                  r.registeredSessions ? `${String(r.registeredSessions).replace(/회$/, "")}회` : "-"
                 )}</td>
+                <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-600 md:px-6">${escapeHtml(r.attendance || "-")}</td>
                 <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-600 md:px-6">이해 ${escapeHtml(
                   r.comprehension || "-"
                 )} · 참여 ${escapeHtml(r.participation || "-")}</td>
-                <td class="whitespace-nowrap px-4 py-3 md:px-6">
-                  <span class="inline-flex items-center gap-1 rounded-full ${
-                    submitted ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"
-                  } px-2.5 py-1 text-[11px] font-medium">${submitted ? "제출" : "미제출"}</span>
-                  <span class="ml-1 inline-flex items-center gap-1 rounded-full ${
-                    checked ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"
-                  } px-2.5 py-1 text-[11px] font-medium">${checked ? "확인완료" : "미확인"}</span>
-                </td>
                 <td class="whitespace-nowrap px-4 py-3 text-right md:px-6">
                   <button type="button" class="study-edit inline-flex h-11 w-11 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-brand-600" data-id="${escapeHtml(
                     r.id
@@ -2992,9 +3497,9 @@
     return `
       <section class="mb-6 flex flex-col gap-1 md:flex-row md:items-end md:justify-between">
         <div>
-          <h2 class="text-xl font-semibold text-slate-900 md:text-2xl">학습·숙제 기록</h2>
+          <h2 class="text-xl font-semibold text-slate-900 md:text-2xl">학습 기록</h2>
           <p class="mt-1 text-sm text-slate-500">
-            수업 날짜별 학습 내용·이해도·참여도·숙제 현황을 기록합니다. 이 화면은 연결된 구글 스프레드시트를 직접 읽고 씁니다.
+            수업 날짜별 출결·학습 내용·이해도·참여도를 기록합니다. 이 화면은 연결된 구글 스프레드시트를 직접 읽고 씁니다.
           </p>
         </div>
         <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -3012,7 +3517,7 @@
         <label class="sr-only" for="study-class-type-filter">반 구분 필터</label>
         <select id="study-class-type-filter" class="form-input min-w-[160px] text-sm">${classTypeFilterOptions}</select>
         <label class="sr-only" for="study-search-input">검색</label>
-        <input id="study-search-input" type="text" class="form-input min-w-[220px] text-sm" placeholder="학습 내용·보완점·피드백 검색" value="${escapeHtml(
+        <input id="study-search-input" type="text" class="form-input min-w-[220px] text-sm" placeholder="학습 주제·목표·내용·메모 검색" value="${escapeHtml(
           state.studyKeyword
         )}" />
       </section>
@@ -3026,7 +3531,7 @@
           <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <div>
               <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-student">학생<span class="text-red-500">*</span></label>
-              <select id="sf-student" name="studentId" class="form-input" required>${renderStudySelectOptions(d.studentId)}</select>
+              <select id="sf-student" name="studentId" class="form-input" required>${renderStudentSelectOptions(d.studentId)}</select>
             </div>
             <div>
               <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-class-date">수업 날짜<span class="text-red-500">*</span></label>
@@ -3034,41 +3539,53 @@
             </div>
             <div>
               <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-registered-sessions">등록 회차</label>
-              ${renderStudySelect("sf-registered-sessions", "registeredSessions", STUDY_REGISTERED_SESSION_OPTIONS, d.registeredSessions ? Number(d.registeredSessions) : "", false)}
+              ${renderSelectField("sf-registered-sessions", "registeredSessions", STUDY_REGISTERED_SESSION_OPTIONS, d.registeredSessions ? Number(d.registeredSessions) : "", false)}
             </div>
             <div>
               <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-class-type">반 구분</label>
-              ${renderStudySelect("sf-class-type", "classType", STUDY_CLASS_TYPES, d.classType, false)}
+              ${renderSelectField("sf-class-type", "classType", STUDY_CLASS_TYPES, d.classType, false)}
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-attendance">출결</label>
+              ${renderSelectField("sf-attendance", "attendance", STUDY_ATTENDANCE_OPTIONS, d.attendance, false)}
             </div>
             <div>
               <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-comprehension">이해도</label>
-              ${renderStudySelect("sf-comprehension", "comprehension", STUDY_LEVEL_OPTIONS, d.comprehension, false)}
+              ${renderSelectField("sf-comprehension", "comprehension", STUDY_LEVEL_OPTIONS, d.comprehension, false)}
             </div>
             <div>
               <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-participation">참여도</label>
-              ${renderStudySelect("sf-participation", "participation", STUDY_LEVEL_OPTIONS, d.participation, false)}
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-homework-submitted">숙제 제출 여부</label>
-              ${renderStudySelect("sf-homework-submitted", "homeworkSubmitted", ["제출", "미제출"], d.homeworkSubmitted || "미제출", false)}
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-homework-checked">숙제 확인 상태</label>
-              ${renderStudySelect("sf-homework-checked", "homeworkChecked", ["확인완료", "미확인"], d.homeworkChecked || "미확인", false)}
+              ${renderSelectField("sf-participation", "participation", STUDY_LEVEL_OPTIONS, d.participation, false)}
             </div>
           </div>
           <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-content">학습 내용</label>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-topic">학습 주제</label>
+              <textarea id="sf-topic" name="topic" rows="2" class="form-input">${escapeHtml(d.topic)}</textarea>
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-goal">학습 목표</label>
+              <textarea id="sf-goal" name="goal" rows="2" class="form-input">${escapeHtml(d.goal)}</textarea>
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-content">배운 내용</label>
               <textarea id="sf-content" name="content" rows="3" class="form-input">${escapeHtml(d.content)}</textarea>
             </div>
             <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-improvement">보완점</label>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-strengths">잘한 점</label>
+              <textarea id="sf-strengths" name="strengths" rows="3" class="form-input">${escapeHtml(d.strengths)}</textarea>
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-improvement">보완할 점</label>
               <textarea id="sf-improvement" name="improvement" rows="3" class="form-input">${escapeHtml(d.improvement)}</textarea>
             </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-next-plan">다음 수업 계획</label>
+              <textarea id="sf-next-plan" name="nextPlan" rows="3" class="form-input">${escapeHtml(d.nextPlan)}</textarea>
+            </div>
             <div class="sm:col-span-2">
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-feedback">피드백</label>
-              <textarea id="sf-feedback" name="feedback" rows="3" class="form-input">${escapeHtml(d.feedback)}</textarea>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-teacher-memo">선생님 메모</label>
+              <textarea id="sf-teacher-memo" name="teacherMemo" rows="3" class="form-input">${escapeHtml(d.teacherMemo)}</textarea>
             </div>
           </div>
           <div class="mt-4 flex justify-end">
@@ -3087,8 +3604,8 @@
               <th class="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500 md:px-6">학생</th>
               <th class="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500 md:px-6">반 구분</th>
               <th class="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500 md:px-6">등록 회차</th>
+              <th class="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500 md:px-6">출결</th>
               <th class="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500 md:px-6">이해도·참여도</th>
-              <th class="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500 md:px-6">숙제</th>
               <th class="whitespace-nowrap px-4 py-3 text-right text-xs font-medium uppercase tracking-wide text-slate-500 md:px-6">관리</th>
             </tr>
           </thead>
@@ -3107,13 +3624,16 @@
       classDate: val("classDate"),
       registeredSessions: val("registeredSessions"),
       classType: val("classType"),
+      attendance: val("attendance"),
+      topic: val("topic"),
+      goal: val("goal"),
       content: val("content"),
       comprehension: val("comprehension"),
       participation: val("participation"),
+      strengths: val("strengths"),
       improvement: val("improvement"),
-      homeworkSubmitted: val("homeworkSubmitted") || "미제출",
-      homeworkChecked: val("homeworkChecked") || "미확인",
-      feedback: val("feedback"),
+      nextPlan: val("nextPlan"),
+      teacherMemo: val("teacherMemo"),
     };
   }
 
@@ -3138,16 +3658,17 @@
     if (submitBtn) submitBtn.disabled = true;
 
     const editingId = state.studyDraft.id;
-    const student = state.students.find((s) => s.id === fields.studentId);
-    const payload = Object.assign({}, fields, { studentName: student ? student.name : "" });
+    const student = findStudentById(fields.studentId);
+    const { studentId, ...rest } = fields;
+    const payload = Object.assign({}, rest, { studentName: student ? student.name : "" });
 
     try {
       if (editingId) {
         await updateStudyRecord(editingId, payload);
-        showToast("학습·숙제 기록이 수정되었습니다.");
+        showToast("학습 기록이 수정되었습니다.");
       } else {
         await createStudyRecord(payload);
-        showToast("학습·숙제 기록이 추가되었습니다.");
+        showToast("학습 기록이 추가되었습니다.");
       }
       state.studyDraft = emptyStudyDraft();
       await loadStudyRecords();
@@ -3211,7 +3732,7 @@
     const studentSelect = document.getElementById("sf-student");
     if (studentSelect) {
       studentSelect.addEventListener("change", () => {
-        const student = state.students.find((s) => s.id === studentSelect.value);
+        const student = findStudentById(studentSelect.value);
         const registeredSessionsInput = document.getElementById("sf-registered-sessions");
         if (student && registeredSessionsInput && STUDY_REGISTERED_SESSION_OPTIONS.includes(Number(student.registeredSessions))) {
           registeredSessionsInput.value = String(student.registeredSessions);
@@ -3243,13 +3764,13 @@
         const id = btn.getAttribute("data-id");
         const rec = state.studyRecords.find((r) => r.id === id);
         openConfirm({
-          title: "학습·숙제 기록을 삭제할까요?",
+          title: "학습 기록을 삭제할까요?",
           message: rec && rec.studentName ? `${rec.studentName} 님의 이 기록을 삭제합니다.` : "이 기록을 삭제합니다.",
           onConfirm: async () => {
             try {
               await deleteStudyRecord(id);
               if (state.studyDraft.id === id) state.studyDraft = emptyStudyDraft();
-              showToast("학습·숙제 기록이 삭제되었습니다.");
+              showToast("학습 기록이 삭제되었습니다.");
               await loadStudyRecords();
             } catch (err) {
               console.error("[deleteStudyRecord]", err);
@@ -6106,17 +6627,19 @@
 
     cleanupRefundPdfArtifacts();
     const sandbox = document.createElement("div");
-    sandbox.style.position = "fixed";
-    sandbox.style.left = "-100000px";
-    sandbox.style.top = "0";
+    // No `position: fixed`/`absolute` + off-screen offset here on purpose: those take the
+    // node out of (or shift it oddly within) normal document flow, and html2canvas measures
+    // its capture area from the document's flow height — that previously made it capture
+    // only a partial page and leave the rest blank. Keeping this in normal static flow at
+    // the end of <body> and hiding it with `opacity: 0` (not visually offset) guarantees the
+    // document's height genuinely includes the whole export node, so html2canvas's own
+    // default full-height capture works with no manual height guessing.
     sandbox.style.width = "210mm";
-    sandbox.style.height = "auto";
     sandbox.style.padding = "0";
     sandbox.style.margin = "0";
     sandbox.style.background = "#ffffff";
-    sandbox.style.zIndex = "-1";
+    sandbox.style.opacity = "0";
     sandbox.style.pointerEvents = "none";
-    sandbox.style.overflow = "visible";
 
     const exportNode = previewPaper.cloneNode(true);
     exportNode.style.width = "190mm";
@@ -6139,6 +6662,12 @@
             scale: 2,
             useCORS: true,
             backgroundColor: "#ffffff",
+            // Without this, html2canvas computes the capture region using the *page's*
+            // current scroll position (e.g. the student list scrolled down before opening
+            // this modal) instead of the export node's own position, silently cropping the
+            // image to a scroll-offset slice of the page — most of the sheet renders blank.
+            scrollX: 0,
+            scrollY: 0,
           },
           jsPDF: {
             unit: "mm",

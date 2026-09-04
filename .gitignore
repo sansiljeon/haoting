@@ -3,3 +3,15 @@ node_modules/
 .env
 .env.local
 .env.*.local
+.vercel
+
+# Real student data files sometimes dropped at the repo root for reference
+# (e.g. KakaoTalk TalkFile_ exports) must never be committed.
+*.xlsx
+*.xls
+*.csv
+
+# macOS AppleDouble resource-fork junk (shows up when this repo lives on a
+# non-APFS/exFAT volume like /Volumes/라포) — never intentional content.
+._*
+.DS_Store

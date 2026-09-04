@@ -109,6 +109,21 @@ window.HaotingDB = {
     return firebaseSignOut(auth);
   },
 
+  /**
+   * 현재 로그인한 사용자의 Firebase ID 토큰. /api/* 호출 시 Authorization 헤더로
+   * 실어 보내 서버가 "정말 로그인한 사용자인지" 검증할 수 있게 합니다.
+   * 로그인 상태가 아니면 null 을 반환합니다.
+   */
+  async getIdToken() {
+    if (!auth || !auth.currentUser) return null;
+    try {
+      return await auth.currentUser.getIdToken();
+    } catch (err) {
+      console.error("[getIdToken]", err);
+      return null;
+    }
+  },
+
   /** 현재 막혀 있는 이유. UI 에 표시할 사람이 읽을 수 있는 한국어 메시지. */
   configError() {
     if (!cfg) {

@@ -5,25 +5,27 @@ import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const html = readFileSync(join(__dirname, '..', 'index.html'), 'utf-8');
+const html = readFileSync(join(__dirname, '..', 'public', 'index.html'), 'utf-8');
 
-describe('학습·숙제 기록 nav item markup', () => {
+describe('숙제 기록 / 학습 기록 nav item markup', () => {
   const dom = new JSDOM(html);
   const { document } = dom.window;
 
-  it('adds a "study" nav button alongside the existing routes', () => {
-    const button = document.querySelector('button.nav-item[data-route="study"]');
+  it.each([
+    ['homework', '숙제 기록'],
+    ['study', '학습 기록'],
+  ])('adds a "%s" nav button with the label "%s"', (route, label) => {
+    const button = document.querySelector(`button.nav-item[data-route="${route}"]`);
     expect(button).not.toBeNull();
-    expect(button.textContent).toContain('학습·숙제 기록');
+    expect(button.textContent).toContain(label);
   });
 
-  it('keeps the same structure (icon + label) as the other nav buttons', () => {
-    const button = document.querySelector('button.nav-item[data-route="study"]');
+  it.each(['homework', 'study'])('keeps the same structure (icon + label) for "%s"', (route) => {
+    const button = document.querySelector(`button.nav-item[data-route="${route}"]`);
     const icon = button.querySelector('i.fa-solid');
     const label = button.querySelector('span');
     expect(icon).not.toBeNull();
     expect(label).not.toBeNull();
-    expect(label.textContent).toBe('학습·숙제 기록');
   });
 
   it('loads api-config.js before app.js so window.HAOTING_API_TOKEN is available first', () => {

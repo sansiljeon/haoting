@@ -3,14 +3,15 @@
   "private": true,
   "scripts": {
     "build": "npm run build:css",
-    "build:css": "tailwindcss -i ./src/tailwind-input.css -o ./tailwind.css --minify",
-    "watch:css": "tailwindcss -i ./src/tailwind-input.css -o ./tailwind.css --watch",
+    "build:css": "tailwindcss -i ./src/tailwind-input.css -o ./public/tailwind.css --minify",
+    "watch:css": "tailwindcss -i ./src/tailwind-input.css -o ./public/tailwind.css --watch",
     "test": "vitest run"
   },
   "engines": {
     "node": "20.x"
   },
   "dependencies": {
+    "firebase-admin": "^14.3.0",
     "google-auth-library": "^9.15.0"
   },
   "devDependencies": {

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const html = readFileSync(join(__dirname, '..', 'index.html'), 'utf-8');
+const html = readFileSync(join(__dirname, '..', 'public', 'index.html'), 'utf-8');
 
 describe('skip-to-content link', () => {
   const dom = new JSDOM(html);

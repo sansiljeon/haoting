@@ -3,13 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../api/lib/google-auth.js");
 vi.mock("../../api/lib/firebase-auth.js");
-vi.mock("../../api/lib/google-sheets.js");
+vi.mock("../../api/lib/google-sheets-homework.js");
 
 import { isGoogleConfigured, requireInternalToken } from "../../api/lib/google-auth.js";
 import { requireFirebaseAuth } from "../../api/lib/firebase-auth.js";
-import { listRecords, appendRecord, updateRecordById, deleteById } from "../../api/lib/google-sheets.js";
-import listCreateHandler from "../../api/study-records/index.js";
-import itemHandler from "../../api/study-records/[id].js";
+import { listRecords, appendRecord, updateRecordById, deleteById } from "../../api/lib/google-sheets-homework.js";
+import listCreateHandler from "../../api/homework-records/index.js";
+import itemHandler from "../../api/homework-records/[id].js";
 
 function makeRes() {
   const res = { statusCode: null, body: null };
@@ -33,21 +33,19 @@ const sampleRecord = (overrides = {}) =>
       classType: "일반 회화반",
       studentName: "홍길동",
       registeredSessions: "8",
-      attendance: "출석",
-      topic: "여행 회화",
-      goal: "여행 상황에서 기본 표현 사용",
-      content: "여행 회화 표현과 문장 구성",
-      comprehension: "보통",
-      participation: "좋음",
-      strengths: "기본 표현을 자연스럽게 활용함",
-      improvement: "시제 사용 복습",
-      nextPlan: "시제 복습 후 문장 확장",
-      teacherMemo: "",
+      content: "여행 회화",
+      homeworkText: "교재 12쪽 문장 10개",
+      submitted: "완료",
+      checked: "확인 완료",
+      feedback: "시제 사용을 한 번 더 복습하세요.",
+      recheck: "불필요",
+      nextCheckDate: "",
+      memo: "",
     },
     overrides
   );
 
-describe("api/study-records", () => {
+describe("api/homework-records", () => {
   beforeEach(() => {
     process.env = { ...ORIGINAL_ENV, GOOGLE_SHEETS_SPREADSHEET_ID: "sheet-id" };
     vi.mocked(requireFirebaseAuth).mockReset().mockResolvedValue(true);
@@ -59,7 +57,7 @@ describe("api/study-records", () => {
     vi.mocked(deleteById).mockReset();
   });
 
-  describe("GET/POST /api/study-records", () => {
+  describe("GET/POST /api/homework-records", () => {
     it("returns 401 without calling Sheets when the Firebase ID token check fails", async () => {
       vi.mocked(requireFirebaseAuth).mockImplementation(async (req, res) => {
         res.status(401).json({ error: "unauthorized" });
@@ -130,7 +128,7 @@ describe("api/study-records", () => {
         res
       );
       expect(res.statusCode).toBe(201);
-      expect(res.body.record).toMatchObject({ studentName: "홍길동", classDate: "2026-09-10" });
+      expect(res.body.record).toMatchObject({ studentName: "홍길동", classDate: "2026-09-10", submitted: "미제출", checked: "미확인" });
       expect(res.body.record.id).toBeTruthy();
     });
 
@@ -148,7 +146,7 @@ describe("api/study-records", () => {
     });
   });
 
-  describe("PATCH/DELETE /api/study-records/:id", () => {
+  describe("PATCH/DELETE /api/homework-records/:id", () => {
     it("returns 401 without calling Sheets when the Firebase ID token check fails", async () => {
       vi.mocked(requireFirebaseAuth).mockImplementation(async (req, res) => {
         res.status(401).json({ error: "unauthorized" });
@@ -173,11 +171,11 @@ describe("api/study-records", () => {
     });
 
     it("updates a record on PATCH", async () => {
-      vi.mocked(updateRecordById).mockResolvedValue(sampleRecord({ content: "2과" }));
+      vi.mocked(updateRecordById).mockResolvedValue(sampleRecord({ checked: "재제출 필요" }));
       const res = makeRes();
-      await itemHandler({ method: "PATCH", headers: {}, query: { id: "rec-1" }, body: { content: "2과" } }, res);
+      await itemHandler({ method: "PATCH", headers: {}, query: { id: "rec-1" }, body: { checked: "재제출 필요" } }, res);
       expect(res.statusCode).toBe(200);
-      expect(res.body.record.content).toBe("2과");
+      expect(res.body.record.checked).toBe("재제출 필요");
     });
 
     it("responds 404 on PATCH when the id isn't found", async () => {

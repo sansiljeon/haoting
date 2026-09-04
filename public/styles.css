@@ -733,21 +733,21 @@ textarea.form-input {
   border: 1px solid #dbe4ee;
   border-radius: 0.75rem;
   box-shadow: 0 20px 40px -28px rgba(15, 23, 42, 0.45);
-  padding: 0.95rem 0.95rem 1.05rem;
+  padding: 1.25rem 1.25rem 1.35rem;
 }
 
 .refund-sheet-accent {
-  height: 0.4rem;
+  height: 0.45rem;
   border-radius: 9999px;
   background: linear-gradient(90deg, #2c92b5 0%, #4ca8c7 100%);
 }
 
 .refund-sheet-accent.top {
-  margin-bottom: 1.15rem;
+  margin-bottom: 1.4rem;
 }
 
 .refund-sheet-accent.bottom {
-  margin-top: 1.2rem;
+  margin-top: 1.5rem;
 }
 
 .refund-sheet-header {
@@ -755,12 +755,12 @@ textarea.form-input {
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
-  margin-bottom: 1.25rem;
+  margin-bottom: 1.55rem;
 }
 
 .refund-sheet-title {
   margin: 0;
-  font-size: clamp(1.18rem, 2vw, 1.55rem);
+  font-size: clamp(1.4rem, 2.4vw, 1.85rem);
   font-weight: 800;
   line-height: 1.1;
   letter-spacing: -0.04em;
@@ -768,21 +768,21 @@ textarea.form-input {
 }
 
 .refund-sheet-subtitle {
-  margin: 0.35rem 0 0;
-  font-size: 0.74rem;
+  margin: 0.45rem 0 0;
+  font-size: 0.8rem;
   letter-spacing: 0.24em;
   color: #64748b;
 }
 
 .refund-sheet-block + .refund-sheet-block {
-  margin-top: 1.5rem;
+  margin-top: 1.85rem;
 }
 
 .refund-sheet-section-title {
-  margin: 0 0 0.55rem;
-  padding-bottom: 0.35rem;
+  margin: 0 0 0.65rem;
+  padding-bottom: 0.45rem;
   border-bottom: 2px solid #4ca8c7;
-  font-size: 0.92rem;
+  font-size: 1.05rem;
   font-weight: 700;
   color: #0f172a;
 }
@@ -796,10 +796,10 @@ textarea.form-input {
 .refund-sheet-table th,
 .refund-sheet-table td {
   border: 1px solid #cbd5e1;
-  padding: 0.52rem 0.44rem;
+  padding: 0.65rem 0.52rem;
   text-align: center;
-  font-size: 0.78rem;
-  line-height: 1.35;
+  font-size: 0.88rem;
+  line-height: 1.45;
   color: #0f172a;
 }
 
@@ -814,10 +814,10 @@ textarea.form-input {
 }
 
 .refund-sheet-note {
-  margin-top: 0.95rem;
+  margin-top: 1.15rem;
   text-align: center;
-  font-size: 0.74rem;
-  line-height: 1.65;
+  font-size: 0.8rem;
+  line-height: 1.75;
   font-weight: 600;
   color: #334155;
 }
@@ -825,9 +825,9 @@ textarea.form-input {
 .refund-sheet-footer {
   display: flex;
   justify-content: center;
-  gap: 2rem;
-  margin-top: 2.25rem;
-  font-size: 0.82rem;
+  gap: 2.25rem;
+  margin-top: 2.7rem;
+  font-size: 0.9rem;
   font-weight: 600;
   color: #1e293b;
 }

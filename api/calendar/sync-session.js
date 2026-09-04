@@ -1,4 +1,5 @@
 import { googleFetch, isGoogleConfigured, requireInternalToken } from "../lib/google-auth.js";
+import { requireFirebaseAuth } from "../lib/firebase-auth.js";
 
 const TIMEZONE = "Asia/Seoul";
 
@@ -42,6 +43,7 @@ async function deleteEvent(calendarId, calendarEventId) {
 }
 
 export default async function handler(req, res) {
+  if (!(await requireFirebaseAuth(req, res))) return;
   if (!requireInternalToken(req, res)) return;
 
   const calendarId = process.env.GOOGLE_CALENDAR_ID;

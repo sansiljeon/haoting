@@ -2,8 +2,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../api/lib/google-auth.js");
+vi.mock("../../api/lib/firebase-auth.js");
 
 import { googleFetch, isGoogleConfigured, requireInternalToken } from "../../api/lib/google-auth.js";
+import { requireFirebaseAuth } from "../../api/lib/firebase-auth.js";
 import handler from "../../api/calendar/sync-session.js";
 
 function makeRes() {
@@ -26,7 +28,20 @@ describe("api/calendar/sync-session", () => {
     process.env = { ...ORIGINAL_ENV, GOOGLE_CALENDAR_ID: "shared-calendar@group.calendar.google.com" };
     vi.mocked(googleFetch).mockReset();
     vi.mocked(isGoogleConfigured).mockReset().mockReturnValue(true);
+    vi.mocked(requireFirebaseAuth).mockReset().mockResolvedValue(true);
     vi.mocked(requireInternalToken).mockReset().mockReturnValue(true);
+  });
+
+  it("returns 401 without calling downstream logic when the Firebase ID token check fails", async () => {
+    vi.mocked(requireFirebaseAuth).mockImplementation(async (req, res) => {
+      res.status(401).json({ error: "unauthorized" });
+      return false;
+    });
+    const res = makeRes();
+    await handler({ method: "POST", headers: {}, body: {} }, res);
+    expect(res.statusCode).toBe(401);
+    expect(requireInternalToken).not.toHaveBeenCalled();
+    expect(googleFetch).not.toHaveBeenCalled();
   });
 
   it("returns 401 without calling downstream logic when the internal token check fails", async () => {
