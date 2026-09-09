@@ -162,6 +162,7 @@
     calendarMonthCursor: "", // 수업 일정 캘린더에서 보고 있는 달 ("" 이면 이번 달), "YYYY-MM"
     calendarSelectedDate: null, // 캘린더에서 선택되어 상세 목록이 열려 있는 날짜 ("YYYY-MM-DD")
     calendarInstructorFilter: "all", // 수업 일정 캘린더 강사 필터: "all" | 강사명
+    calendarAddSessionDraft: null, // 캘린더 탭 "새 일정 등록" 모달 입력값 (열려있지 않으면 null) { studentId, sessionNumber, sessionDate, startTime, endTime }
     pendingCounselingLinkId: null, // 상담 상세에서 학생 등록으로 넘어온 경우 연결할 상담 기록 id
     refundStudentId: null, // 환불 내역서 모달에 표시 중인 학생 id
     refundDraft: null, // 환불 내역서 작성 중인 임시 draft
@@ -6111,6 +6112,143 @@
             : `<p class="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-center text-sm text-slate-400">이 날짜에 등록된 수업이 없습니다.</p>`
         }
         </div>
+        <div class="mt-3 border-t border-slate-100 pt-3">
+          <button
+            type="button"
+            id="btn-open-calendar-add-session-for-date"
+            data-calendar-date="${escapeHtml(selectedDate)}"
+            class="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+          >
+            <i class="fa-solid fa-plus"></i>
+            이 날짜에 일정 등록
+          </button>
+        </div>
+        </section>
+      </div>
+    `;
+  }
+
+  // "회차 등록"이라는 별도 개념은 없고, 학생의 등록 회차 슬롯(getStudentSessionSlots) 중
+  // 하나에 날짜/시간을 채워 넣는 것이 곧 등록입니다 — 회차 관리 패널과 같은 저장 경로
+  // (saveStudentSessionRecord)를 그대로 재사용합니다.
+  function renderCalendarAddSessionModal() {
+    const draft = state.calendarAddSessionDraft;
+    if (!draft) return "";
+
+    const student = draft.studentId ? state.students.find((s) => s.id === draft.studentId) : null;
+    const slots = student ? getStudentSessionSlots(student) : [];
+
+    return `
+      <div
+        id="calendar-add-session-modal"
+        class="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="calendar-add-session-title"
+      >
+        <section class="app-modal-panel w-full max-w-md rounded-2xl bg-white p-4 shadow-2xl md:p-6">
+          <div class="mb-4 flex items-center justify-between">
+            <p id="calendar-add-session-title" class="text-sm font-semibold text-slate-900">새 수업 일정 등록</p>
+            <button
+              type="button"
+              id="btn-close-calendar-add-session"
+              class="rounded-md p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              aria-label="닫기"
+            >
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </div>
+
+          <div class="space-y-3">
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="cas-student">학생</label>
+              <select
+                id="cas-student"
+                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+              >
+                ${renderStudentSelectOptions(draft.studentId)}
+              </select>
+            </div>
+
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="cas-session-number">회차</label>
+              <select
+                id="cas-session-number"
+                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                ${!student || slots.length === 0 ? "disabled" : ""}
+              >
+                ${
+                  !student
+                    ? `<option value="">학생을 먼저 선택하세요</option>`
+                    : slots.length === 0
+                    ? `<option value="">등록된 회차가 없는 학생입니다</option>`
+                    : [`<option value="">회차 선택</option>`]
+                        .concat(
+                          slots.map(
+                            (slot) => `
+                        <option value="${slot.sessionNumber}"${
+                              Number(draft.sessionNumber) === slot.sessionNumber ? " selected" : ""
+                            }>
+                          ${formatNumber(slot.sessionNumber)}회차${
+                              slot.sessionDate ? ` (기존: ${escapeHtml(formatDate(slot.sessionDate))} — 덮어쓰기)` : " (미정)"
+                            }
+                        </option>
+                      `
+                          )
+                        )
+                        .join("")
+                }
+              </select>
+            </div>
+
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600" for="cas-date">진행일</label>
+              <input
+                type="date"
+                id="cas-date"
+                value="${escapeHtml(draft.sessionDate || "")}"
+                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+              />
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="mb-1 block text-xs font-medium text-slate-600" for="cas-start-time">시작 시간</label>
+                <input
+                  type="time"
+                  id="cas-start-time"
+                  value="${escapeHtml(draft.startTime || "")}"
+                  class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                />
+              </div>
+              <div>
+                <label class="mb-1 block text-xs font-medium text-slate-600" for="cas-end-time">종료 시간</label>
+                <input
+                  type="time"
+                  id="cas-end-time"
+                  value="${escapeHtml(draft.endTime || "")}"
+                  class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              id="btn-cancel-calendar-add-session"
+              class="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+            >
+              취소
+            </button>
+            <button
+              type="button"
+              id="btn-save-calendar-add-session"
+              class="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
+            >
+              저장
+            </button>
+          </div>
         </section>
       </div>
     `;
@@ -6132,6 +6270,14 @@
             구글 캘린더와 연동된 학생 수업 일정을 달력 형식으로 확인하세요.
           </p>
         </div>
+        <button
+          type="button"
+          id="btn-open-calendar-add-session"
+          class="inline-flex items-center justify-center gap-2 self-start rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700"
+        >
+          <i class="fa-solid fa-plus"></i>
+          일정 등록
+        </button>
       </section>
 
       ${renderCalendarInstructorFilterBar(monthCursor)}
@@ -6181,6 +6327,7 @@
       </section>
 
       ${renderCalendarDayDetailPanel(eventsByDate)}
+      ${renderCalendarAddSessionModal()}
     `;
   }
 
@@ -6238,6 +6385,85 @@
     document.querySelectorAll(".calendar-open-student-detail").forEach((btn) => {
       btn.addEventListener("click", () => {
         openStudentDetailModal(btn.dataset.studentId);
+      });
+    });
+
+    // ---- 새 일정 등록 모달 ----
+    document.getElementById("btn-open-calendar-add-session")?.addEventListener("click", () => {
+      state.calendarAddSessionDraft = {
+        studentId: "",
+        sessionNumber: "",
+        sessionDate: state.calendarSelectedDate || "",
+        startTime: "",
+        endTime: "",
+      };
+      render();
+    });
+    document.getElementById("btn-open-calendar-add-session-for-date")?.addEventListener("click", (e) => {
+      const date = e.currentTarget.dataset.calendarDate || "";
+      state.calendarAddSessionDraft = {
+        studentId: "",
+        sessionNumber: "",
+        sessionDate: date,
+        startTime: "",
+        endTime: "",
+      };
+      render();
+    });
+    const closeCalendarAddSessionModal = () => {
+      state.calendarAddSessionDraft = null;
+      render();
+    };
+    document.getElementById("btn-close-calendar-add-session")?.addEventListener("click", closeCalendarAddSessionModal);
+    document.getElementById("btn-cancel-calendar-add-session")?.addEventListener("click", closeCalendarAddSessionModal);
+    document.getElementById("calendar-add-session-modal")?.addEventListener("click", (e) => {
+      if (e.target.id !== "calendar-add-session-modal") return; // 배경 클릭 시에만 닫기
+      closeCalendarAddSessionModal();
+    });
+    document.getElementById("cas-student")?.addEventListener("change", (e) => {
+      if (!state.calendarAddSessionDraft) return;
+      state.calendarAddSessionDraft.studentId = e.target.value;
+      state.calendarAddSessionDraft.sessionNumber = ""; // 학생이 바뀌면 회차 목록도 바뀌므로 초기화
+      render();
+    });
+    document.getElementById("cas-session-number")?.addEventListener("change", (e) => {
+      if (!state.calendarAddSessionDraft) return;
+      state.calendarAddSessionDraft.sessionNumber = e.target.value;
+    });
+    document.getElementById("cas-date")?.addEventListener("change", (e) => {
+      if (!state.calendarAddSessionDraft) return;
+      state.calendarAddSessionDraft.sessionDate = e.target.value;
+    });
+    document.getElementById("cas-start-time")?.addEventListener("change", (e) => {
+      if (!state.calendarAddSessionDraft) return;
+      state.calendarAddSessionDraft.startTime = e.target.value;
+    });
+    document.getElementById("cas-end-time")?.addEventListener("change", (e) => {
+      if (!state.calendarAddSessionDraft) return;
+      state.calendarAddSessionDraft.endTime = e.target.value;
+    });
+    document.getElementById("btn-save-calendar-add-session")?.addEventListener("click", () => {
+      const draft = state.calendarAddSessionDraft;
+      if (!draft) return;
+      if (!draft.studentId) {
+        showToast("학생을 선택해 주세요.");
+        return;
+      }
+      const sessionNumber = Number(draft.sessionNumber);
+      if (!sessionNumber || sessionNumber < 1) {
+        showToast("회차를 선택해 주세요.");
+        return;
+      }
+      if (!draft.sessionDate || !draft.startTime || !draft.endTime) {
+        showToast("진행일과 시작/종료 시간을 모두 입력해 주세요.");
+        return;
+      }
+      const studentId = draft.studentId;
+      state.calendarAddSessionDraft = null;
+      saveStudentSessionRecord(studentId, sessionNumber, {
+        sessionDate: draft.sessionDate,
+        startTime: draft.startTime,
+        endTime: draft.endTime,
       });
     });
   }
@@ -8241,6 +8467,11 @@
       // 확인 모달은 다른 모달 위에 겹쳐 뜰 수 있어 항상 가장 먼저 닫습니다.
       if (document.getElementById("confirm-modal")?.classList.contains("modal-open")) {
         document.getElementById("confirm-cancel")?.click();
+        return;
+      }
+      if (document.getElementById("calendar-add-session-modal")) {
+        state.calendarAddSessionDraft = null;
+        render();
         return;
       }
       if (document.getElementById("calendar-day-detail-modal")) {
