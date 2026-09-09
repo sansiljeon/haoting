@@ -889,6 +889,9 @@
         startTime: record.startTime || "",
         endTime: record.endTime || "",
         isCompleted: !!record.isCompleted,
+        isCancelled: !!record.isCancelled,
+        makeupDate: record.makeupDate || "",
+        calendarEventId: record.calendarEventId || "",
       };
     });
   }
