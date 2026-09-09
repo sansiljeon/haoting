@@ -6128,6 +6128,74 @@
     `;
   }
 
+  // 이름만으로 학생을 찾을 때, 동명이인이 있으면 이름만으로는 특정할 수 없으므로
+  // "이름 (담당 강사)" 형태로 구분 라벨을 만듭니다. 동명이인이 없으면 그냥 이름.
+  function getCalendarStudentLabel(student) {
+    const name = (student.name || "이름 없음").trim();
+    const duplicates = state.students.filter((s) => (s.name || "").trim() === name);
+    if (duplicates.length <= 1) return name;
+    return `${name} (${student.assignedInstructor || "강사 미배정"})`;
+  }
+
+  // 입력값을 구분 라벨("이름 (강사)")로 먼저 매칭하고, 못 찾으면 이름만으로 매칭합니다.
+  // 이름이 유일하면 그대로 매칭, 동명이인이면 특정할 수 없으므로 ambiguous 로 표시합니다.
+  function findCalendarStudentMatch(nameInput) {
+    const trimmed = (nameInput || "").trim();
+    if (!trimmed) return { student: null, ambiguous: false };
+    const byLabel = state.students.find((s) => getCalendarStudentLabel(s) === trimmed);
+    if (byLabel) return { student: byLabel, ambiguous: false };
+    const byName = state.students.filter((s) => (s.name || "").trim() === trimmed);
+    if (byName.length === 1) return { student: byName[0], ambiguous: false };
+    if (byName.length > 1) return { student: null, ambiguous: true };
+    return { student: null, ambiguous: false };
+  }
+
+  // 아직 진행하지 않은(완료 체크가 안 된) 회차만 등록 대상으로 보여줍니다 —
+  // 이미 진행 완료된 회차를 캘린더 탭에서 실수로 덮어쓰는 걸 막기 위함입니다.
+  function getCalendarRegistrableSessionSlots(student) {
+    return getStudentSessionSlots(student).filter((slot) => !slot.isCompleted);
+  }
+
+  function buildCalendarSessionNumberOptionsHtml(student, selectedSessionNumber) {
+    if (!student) return `<option value="">학생을 먼저 선택하세요</option>`;
+    const slots = getCalendarRegistrableSessionSlots(student);
+    if (slots.length === 0) return `<option value="">진행 전 회차가 없습니다</option>`;
+    return [`<option value="">회차 선택</option>`]
+      .concat(
+        slots.map(
+          (slot) => `
+        <option value="${slot.sessionNumber}"${
+            Number(selectedSessionNumber) === slot.sessionNumber ? " selected" : ""
+          }>
+          ${formatNumber(slot.sessionNumber)}회차${
+            slot.sessionDate ? ` (기존: ${escapeHtml(formatDate(slot.sessionDate))} — 덮어쓰기)` : " (미정)"
+          }
+        </option>
+      `
+        )
+      )
+      .join("");
+  }
+
+  function buildCalendarStudentMatchStatusHtml(draft) {
+    const typed = (draft.studentNameInput || "").trim();
+    if (!typed) return { text: "학생 이름을 입력하세요.", tone: "text-slate-400" };
+    if (draft.studentId) {
+      const student = state.students.find((s) => s.id === draft.studentId);
+      return {
+        text: `✓ ${escapeHtml((student && student.name) || "")}${
+          student && student.assignedInstructor ? ` · ${escapeHtml(student.assignedInstructor)} 선생님` : ""
+        }`,
+        tone: "text-emerald-600",
+      };
+    }
+    const { ambiguous } = findCalendarStudentMatch(typed);
+    if (ambiguous) {
+      return { text: "동명이인이 있습니다. 목록에서 정확한 학생을 선택해 주세요.", tone: "text-amber-600" };
+    }
+    return { text: "일치하는 학생을 찾을 수 없습니다.", tone: "text-rose-600" };
+  }
+
   // "회차 등록"이라는 별도 개념은 없고, 학생의 등록 회차 슬롯(getStudentSessionSlots) 중
   // 하나에 날짜/시간을 채워 넣는 것이 곧 등록입니다 — 회차 관리 패널과 같은 저장 경로
   // (saveStudentSessionRecord)를 그대로 재사용합니다.
@@ -6136,7 +6204,10 @@
     if (!draft) return "";
 
     const student = draft.studentId ? state.students.find((s) => s.id === draft.studentId) : null;
-    const slots = student ? getStudentSessionSlots(student) : [];
+    const matchStatus = buildCalendarStudentMatchStatusHtml(draft);
+    const sortedStudents = state.students
+      .slice()
+      .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ko"));
 
     return `
       <div
@@ -6162,12 +6233,19 @@
           <div class="space-y-3">
             <div>
               <label class="mb-1 block text-xs font-medium text-slate-600" for="cas-student">학생</label>
-              <select
+              <input
+                type="text"
                 id="cas-student"
+                list="cas-student-datalist"
+                autocomplete="off"
+                placeholder="학생 이름 입력"
+                value="${escapeHtml(draft.studentNameInput || "")}"
                 class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
-              >
-                ${renderStudentSelectOptions(draft.studentId)}
-              </select>
+              />
+              <datalist id="cas-student-datalist">
+                ${sortedStudents.map((s) => `<option value="${escapeHtml(getCalendarStudentLabel(s))}"></option>`).join("")}
+              </datalist>
+              <p id="cas-student-match-status" class="mt-1 text-xs ${matchStatus.tone}">${matchStatus.text}</p>
             </div>
 
             <div>
@@ -6175,29 +6253,9 @@
               <select
                 id="cas-session-number"
                 class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
-                ${!student || slots.length === 0 ? "disabled" : ""}
+                ${!student || getCalendarRegistrableSessionSlots(student).length === 0 ? "disabled" : ""}
               >
-                ${
-                  !student
-                    ? `<option value="">학생을 먼저 선택하세요</option>`
-                    : slots.length === 0
-                    ? `<option value="">등록된 회차가 없는 학생입니다</option>`
-                    : [`<option value="">회차 선택</option>`]
-                        .concat(
-                          slots.map(
-                            (slot) => `
-                        <option value="${slot.sessionNumber}"${
-                              Number(draft.sessionNumber) === slot.sessionNumber ? " selected" : ""
-                            }>
-                          ${formatNumber(slot.sessionNumber)}회차${
-                              slot.sessionDate ? ` (기존: ${escapeHtml(formatDate(slot.sessionDate))} — 덮어쓰기)` : " (미정)"
-                            }
-                        </option>
-                      `
-                          )
-                        )
-                        .join("")
-                }
+                ${buildCalendarSessionNumberOptionsHtml(student, draft.sessionNumber)}
               </select>
             </div>
 
@@ -6392,6 +6450,7 @@
     document.getElementById("btn-open-calendar-add-session")?.addEventListener("click", () => {
       state.calendarAddSessionDraft = {
         studentId: "",
+        studentNameInput: "",
         sessionNumber: "",
         sessionDate: state.calendarSelectedDate || "",
         startTime: "",
@@ -6403,6 +6462,7 @@
       const date = e.currentTarget.dataset.calendarDate || "";
       state.calendarAddSessionDraft = {
         studentId: "",
+        studentNameInput: "",
         sessionNumber: "",
         sessionDate: date,
         startTime: "",
@@ -6420,11 +6480,29 @@
       if (e.target.id !== "calendar-add-session-modal") return; // 배경 클릭 시에만 닫기
       closeCalendarAddSessionModal();
     });
-    document.getElementById("cas-student")?.addEventListener("change", (e) => {
-      if (!state.calendarAddSessionDraft) return;
-      state.calendarAddSessionDraft.studentId = e.target.value;
-      state.calendarAddSessionDraft.sessionNumber = ""; // 학생이 바뀌면 회차 목록도 바뀌므로 초기화
-      render();
+    document.getElementById("cas-student")?.addEventListener("input", (e) => {
+      const draft = state.calendarAddSessionDraft;
+      if (!draft) return;
+      draft.studentNameInput = e.target.value;
+      const previousStudentId = draft.studentId;
+      const { student: matched } = findCalendarStudentMatch(e.target.value);
+      draft.studentId = matched ? matched.id : "";
+      if (draft.studentId !== previousStudentId) {
+        draft.sessionNumber = ""; // 매칭된 학생이 바뀌면 회차 목록도 바뀌므로 초기화
+      }
+      // 텍스트 입력 중 커서 위치가 튀지 않도록 전체 re-render 대신 회차 select와
+      // 매칭 상태 문구만 직접 갱신합니다.
+      const sessionSelect = document.getElementById("cas-session-number");
+      if (sessionSelect) {
+        sessionSelect.innerHTML = buildCalendarSessionNumberOptionsHtml(matched, draft.sessionNumber);
+        sessionSelect.disabled = !matched || getCalendarRegistrableSessionSlots(matched).length === 0;
+      }
+      const statusEl = document.getElementById("cas-student-match-status");
+      if (statusEl) {
+        const status = buildCalendarStudentMatchStatusHtml(draft);
+        statusEl.textContent = status.text;
+        statusEl.className = `mt-1 text-xs ${status.tone}`;
+      }
     });
     document.getElementById("cas-session-number")?.addEventListener("change", (e) => {
       if (!state.calendarAddSessionDraft) return;
@@ -6446,7 +6524,7 @@
       const draft = state.calendarAddSessionDraft;
       if (!draft) return;
       if (!draft.studentId) {
-        showToast("학생을 선택해 주세요.");
+        showToast("일치하는 학생을 찾을 수 없습니다. 이름을 정확히 입력하거나 목록에서 선택해 주세요.");
         return;
       }
       const sessionNumber = Number(draft.sessionNumber);
