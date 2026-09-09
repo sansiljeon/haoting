@@ -167,4 +167,50 @@ describe("api/calendar/list-changes", () => {
     await handler({ method: "GET", headers: {}, query: {} }, res);
     expect(res.statusCode).toBe(502);
   });
+
+  it("retries with the default lookback when Google rejects a stale client updatedMin (410)", async () => {
+    vi.mocked(googleFetch)
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Google API 410: updatedMinTooLongAgo"), { status: 410 })
+      )
+      .mockResolvedValueOnce({ items: [{ id: "evt-1", status: "confirmed" }] });
+    const res = makeRes();
+    await handler(
+      { method: "GET", headers: {}, query: { updatedMin: "2020-01-01T00:00:00.000Z" } },
+      res
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.body.events.map((e) => e.id)).toEqual(["evt-1"]);
+    expect(googleFetch).toHaveBeenCalledTimes(2);
+    const retryUrl = vi.mocked(googleFetch).mock.calls[1][0];
+    const retryUpdatedMin = new URL(retryUrl).searchParams.get("updatedMin");
+    expect(retryUpdatedMin).not.toBe("2020-01-01T00:00:00.000Z");
+    const ageMs = Date.now() - Date.parse(retryUpdatedMin);
+    expect(ageMs).toBeLessThan(31 * 24 * 60 * 60 * 1000);
+    // syncedAt is still fresh so the client can save it and stop resending the stale checkpoint.
+    expect(Date.now() - Date.parse(res.body.syncedAt)).toBeLessThan(5000);
+  });
+
+  it("responds 502 when the 410 retry with the default lookback also fails", async () => {
+    vi.mocked(googleFetch).mockRejectedValue(
+      Object.assign(new Error("Google API 410: updatedMinTooLongAgo"), { status: 410 })
+    );
+    const res = makeRes();
+    await handler(
+      { method: "GET", headers: {}, query: { updatedMin: "2020-01-01T00:00:00.000Z" } },
+      res
+    );
+    expect(res.statusCode).toBe(502);
+    expect(googleFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry on a 410 when the client already used the default lookback", async () => {
+    vi.mocked(googleFetch).mockRejectedValue(
+      Object.assign(new Error("Google API 410: updatedMinTooLongAgo"), { status: 410 })
+    );
+    const res = makeRes();
+    await handler({ method: "GET", headers: {}, query: {} }, res);
+    expect(res.statusCode).toBe(502);
+    expect(googleFetch).toHaveBeenCalledTimes(1);
+  });
 });
