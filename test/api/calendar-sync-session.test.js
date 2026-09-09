@@ -96,6 +96,49 @@ describe("api/calendar/sync-session", () => {
     expect(res.body).toEqual({ eventId: "new-event-id" });
   });
 
+  it("titles the event '[강사] 학생명 N회차' so a directly-typed Calendar title round-trips", async () => {
+    vi.mocked(googleFetch).mockResolvedValue({ id: "new-event-id" });
+    const res = makeRes();
+    await handler(
+      {
+        method: "POST",
+        headers: {},
+        body: {
+          studentName: "홍길동",
+          instructor: "박환희",
+          sessionNumber: 3,
+          sessionDate: "2026-09-10",
+          startTime: "19:00",
+          endTime: "20:00",
+        },
+      },
+      res
+    );
+    const [, options] = vi.mocked(googleFetch).mock.calls[0];
+    expect(JSON.parse(options.body).summary).toBe("[박환희] 홍길동 3회차");
+  });
+
+  it("falls back to '미배정' in the title when no instructor is assigned", async () => {
+    vi.mocked(googleFetch).mockResolvedValue({ id: "new-event-id" });
+    const res = makeRes();
+    await handler(
+      {
+        method: "POST",
+        headers: {},
+        body: {
+          studentName: "홍길동",
+          sessionNumber: 1,
+          sessionDate: "2026-09-10",
+          startTime: "19:00",
+          endTime: "20:00",
+        },
+      },
+      res
+    );
+    const [, options] = vi.mocked(googleFetch).mock.calls[0];
+    expect(JSON.parse(options.body).summary).toBe("[미배정] 홍길동 1회차");
+  });
+
   it("updates the existing event via PATCH when calendarEventId is provided", async () => {
     vi.mocked(googleFetch).mockResolvedValue({ id: "existing-event-id" });
     const res = makeRes();

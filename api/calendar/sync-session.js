@@ -9,7 +9,10 @@ function eventsBaseUrl(calendarId) {
 
 function buildEventBody({ studentName, instructor, location, curriculum, sessionNumber, sessionDate, startTime, endTime }) {
   return {
-    summary: `[${instructor || "미배정"}] ${studentName} 중국어 수업`,
+    // "[강사] 학생명 N회차" 형식을 고정합니다 — 캘린더에서 직접 만든 일정도 같은 형식이면
+    // 회차 번호로 역매칭되므로(public/app.js parseCalendarEventTitle), 이 형식이 두 방향
+    // 동기화의 계약입니다.
+    summary: `[${instructor || "미배정"}] ${studentName} ${sessionNumber}회차`,
     location: location || undefined,
     description: [curriculum ? `커리큘럼: ${curriculum}` : null, `${sessionNumber}회차`].filter(Boolean).join("\n"),
     start: { dateTime: `${sessionDate}T${startTime}:00`, timeZone: TIMEZONE },

@@ -123,7 +123,7 @@
   }
 
   const state = {
-    route: "students", // "counseling" | "students" | "sales" | "homework" | "study"
+    route: "students", // "counseling" | "students" | "calendar" | "sales" | "homework" | "study"
     students: [],
     isStudentsLoading: true, // Firestore 첫 스냅샷 도착 전까지 true
     counselingRecords: [],
@@ -158,6 +158,10 @@
     editingRenewalEntryByStudent: {}, // 학생별 현재 수정 중인 재등록 기록 id
     detailStudentId: null, // 읽기 전용 상세 모달에 표시 중인 학생 id
     detailCounselingId: null, // 읽기 전용 상담 상세 모달에 표시 중인 상담 기록 id
+    calendarSyncFailures: [], // 구글 캘린더 → 사이트 반영에 실패한 일정 목록 { summary, sessionDate, startTime, endTime, reason }
+    calendarMonthCursor: "", // 수업 일정 캘린더에서 보고 있는 달 ("" 이면 이번 달), "YYYY-MM"
+    calendarSelectedDate: null, // 캘린더에서 선택되어 상세 목록이 열려 있는 날짜 ("YYYY-MM-DD")
+    calendarInstructorFilter: "all", // 수업 일정 캘린더 강사 필터: "all" | 강사명
     pendingCounselingLinkId: null, // 상담 상세에서 학생 등록으로 넘어온 경우 연결할 상담 기록 id
     refundStudentId: null, // 환불 내역서 모달에 표시 중인 학생 id
     refundDraft: null, // 환불 내역서 작성 중인 임시 draft
@@ -189,6 +193,8 @@
   let unsubscribeCounselingRecords = null;
   let unsubscribeAuth = null;
   let authListenerWired = false;
+  /** 로그인 세션당 한 번만 캘린더 → 사이트 역방향 동기화를 시도하기 위한 플래그 */
+  let calendarPullRequested = false;
   /** 학생 폼 저장 중 중복 제출 방지 */
   let studentFormSubmitting = false;
   let counselingFormSubmitting = false;
@@ -1029,6 +1035,236 @@
     }
   }
 
+  // ---- 구글 캘린더 → 사이트 역방향 동기화 -------------------------------------
+  // 사이트에서 만든 이벤트는 summary가 "[강사] 학생명 N회차" 형식을 따르므로,
+  // 캘린더에서 직접 만든 일정도 이 형식을 지키면 학생·회차로 역매칭할 수 있습니다.
+  const CALENDAR_TIMEZONE = "Asia/Seoul";
+  const CALENDAR_LAST_SYNC_STORAGE_KEY = "haoting_calendar_last_sync_v1";
+
+  function parseGoogleEventDateTime(part) {
+    if (!part) return null;
+    if (part.date) return { sessionDate: part.date, time: "" };
+    if (!part.dateTime) return null;
+    const parsed = new Date(part.dateTime);
+    if (Number.isNaN(parsed.getTime())) return null;
+    // Format via Intl instead of slicing the ISO string, since a directly-edited
+    // Calendar event's offset isn't guaranteed to match what we originally sent.
+    const fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: CALENDAR_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    const map = {};
+    fmt.formatToParts(parsed).forEach((p) => {
+      map[p.type] = p.value;
+    });
+    return { sessionDate: `${map.year}-${map.month}-${map.day}`, time: `${map.hour}:${map.minute}` };
+  }
+
+  // 캘린더에 직접 넣는 일정은 이 형식을 반드시 지켜야 회차를 정확히 찾을 수 있습니다:
+  // "[강사명] 학생명 N회차" (예: "[박환희] 홍길동 3회차")
+  const CALENDAR_TITLE_PATTERN = /^\[(.*?)\]\s*(.+?)\s+(\d+)\s*회차\s*$/;
+
+  function parseCalendarEventTitle(summary) {
+    const match = CALENDAR_TITLE_PATTERN.exec(String(summary || "").trim());
+    if (!match) return null;
+    const sessionNumber = Number(match[3]);
+    if (!Number.isInteger(sessionNumber) || sessionNumber <= 0) return null;
+    return { instructor: match[1].trim(), studentName: match[2].trim(), sessionNumber };
+  }
+
+  function addCalendarSyncFailure(event, reason) {
+    state.calendarSyncFailures.push({
+      summary: String(event.summary || "(제목 없음)"),
+      sessionDate: (event.start && (event.start.date || event.start.dateTime)) || "",
+      reason,
+    });
+  }
+
+  // 세션 레코드를 병합·생성합니다. 이미 있는 회차면 필드만 갱신하고, 없는 회차(캘린더에서
+  // 직접 만든 새 일정)면 새로 만듭니다. 캘린더 → 사이트 방향 전용이라 다시 캘린더로
+  // 되쏘지 않습니다(syncSessionCalendarEvent 를 부르지 않음).
+  async function upsertSessionRecordFromCalendar(studentId, sessionNumber, fields) {
+    const student = state.students.find((item) => item.id === studentId);
+    if (!student) return;
+    const current = normalizeSessionRecords(student.sessionRecords);
+    const map = new Map(current.map((item) => [item.sessionNumber, item]));
+    const existing = map.get(sessionNumber) || {
+      sessionNumber,
+      sessionDate: "",
+      startTime: "",
+      endTime: "",
+      isCompleted: false,
+      calendarEventId: "",
+      isCancelled: false,
+      makeupDate: "",
+    };
+    map.set(sessionNumber, Object.assign({}, existing, fields));
+    const payload = normalizeSessionRecords(Array.from(map.values()));
+    student.sessionRecords = payload;
+    student.lastClassDate = getLatestCompletedSessionDate(payload);
+    render();
+    try {
+      await updateStudent(studentId, {
+        sessionRecords: payload,
+        lastClassDate: student.lastClassDate,
+      });
+    } catch (err) {
+      console.error("[calendar pull write-back]", err);
+    }
+  }
+
+  function buildCalendarEventIndex() {
+    const map = new Map();
+    state.students.forEach((student) => {
+      normalizeSessionRecords(student.sessionRecords).forEach((record) => {
+        if (record.calendarEventId) {
+          map.set(record.calendarEventId, { studentId: student.id, sessionNumber: record.sessionNumber });
+        }
+      });
+    });
+    return map;
+  }
+
+  // 이미 사이트에 연결된 이벤트(calendarEventId 일치)의 시간/취소 여부 변경을 반영합니다.
+  async function applyCalendarEventToKnownSession(match, event) {
+    const student = state.students.find((item) => item.id === match.studentId);
+    if (!student) return;
+    if (event.status === "cancelled") {
+      await upsertSessionRecordFromCalendar(match.studentId, match.sessionNumber, {
+        sessionDate: "",
+        startTime: "",
+        endTime: "",
+        calendarEventId: "",
+      });
+      return;
+    }
+    const startInfo = parseGoogleEventDateTime(event.start);
+    const endInfo = parseGoogleEventDateTime(event.end);
+    if (!startInfo || !endInfo) return;
+    const current = normalizeSessionRecords(student.sessionRecords).find(
+      (item) => item.sessionNumber === match.sessionNumber
+    );
+    if (
+      current &&
+      current.sessionDate === startInfo.sessionDate &&
+      current.startTime === startInfo.time &&
+      current.endTime === endInfo.time
+    ) {
+      return; // 변경 없음
+    }
+    await upsertSessionRecordFromCalendar(match.studentId, match.sessionNumber, {
+      sessionDate: startInfo.sessionDate,
+      startTime: startInfo.time,
+      endTime: endInfo.time,
+    });
+  }
+
+  // 캘린더에서 직접 만든(사이트를 거치지 않은) 새 일정을 제목으로 학생·회차에 매칭합니다.
+  // "[강사] 학생명 N회차" 형식을 정확히 지키고, 이름이 일치하는 학생이 한 명뿐이며,
+  // N회차가 등록 회차 범위 안에 있고 다른 이벤트와 충돌하지 않을 때만 반영합니다 —
+  // 애매하거나 형식이 어긋나면 추측하지 않고 실패 목록에 남깁니다.
+  function tryImportCalendarEventAsNewSession(event) {
+    const parsed = parseCalendarEventTitle(event.summary);
+    if (!parsed) {
+      addCalendarSyncFailure(event, '제목 형식이 올바르지 않습니다. 예: "[강사명] 학생명 3회차"');
+      return Promise.resolve();
+    }
+
+    const candidates = state.students.filter((item) => (item.name || "").trim() === parsed.studentName);
+    if (candidates.length === 0) {
+      addCalendarSyncFailure(event, `'${parsed.studentName}' 학생을 찾을 수 없습니다.`);
+      return Promise.resolve();
+    }
+    if (candidates.length > 1) {
+      addCalendarSyncFailure(event, `'${parsed.studentName}'과(와) 이름이 같은 학생이 ${candidates.length}명 있어 특정할 수 없습니다.`);
+      return Promise.resolve();
+    }
+    const student = candidates[0];
+
+    const totalSessions = Math.max(0, Number(student.registeredSessions) || 0);
+    if (parsed.sessionNumber > totalSessions) {
+      addCalendarSyncFailure(
+        event,
+        `등록 회차(${totalSessions}회차)를 초과하는 ${parsed.sessionNumber}회차입니다.`
+      );
+      return Promise.resolve();
+    }
+
+    const records = normalizeSessionRecords(student.sessionRecords);
+    const existingRecord = records.find((item) => item.sessionNumber === parsed.sessionNumber);
+    if (existingRecord && existingRecord.calendarEventId && existingRecord.calendarEventId !== event.id) {
+      addCalendarSyncFailure(event, `${parsed.sessionNumber}회차는 이미 다른 캘린더 일정과 연결되어 있습니다.`);
+      return Promise.resolve();
+    }
+
+    const startInfo = parseGoogleEventDateTime(event.start);
+    const endInfo = parseGoogleEventDateTime(event.end);
+    if (!startInfo || !endInfo || !startInfo.time || !endInfo.time) {
+      addCalendarSyncFailure(event, "시작/종료 시간이 없는 일정입니다(하루 종일 일정은 지원하지 않음).");
+      return Promise.resolve();
+    }
+
+    return upsertSessionRecordFromCalendar(student.id, parsed.sessionNumber, {
+      sessionDate: startInfo.sessionDate,
+      startTime: startInfo.time,
+      endTime: endInfo.time,
+      calendarEventId: event.id,
+    });
+  }
+
+  // 사이트를 열 때(로그인 세션당 1회) 마지막으로 확인한 시점 이후 구글 캘린더에서
+  // 바뀐 내용을 가져와 사이트에 반영합니다. 실패해도 사이트 사용에는 영향 없습니다.
+  async function pullCalendarChanges() {
+    if (!isDBReady()) return;
+    let updatedMin = "";
+    try {
+      updatedMin = window.localStorage.getItem(CALENDAR_LAST_SYNC_STORAGE_KEY) || "";
+    } catch (_) {
+      updatedMin = "";
+    }
+
+    let data;
+    try {
+      const params = new URLSearchParams();
+      if (updatedMin) params.set("updatedMin", updatedMin);
+      const res = await fetch(`/api/calendar/list-changes?${params.toString()}`, {
+        headers: await internalApiHeaders(),
+      });
+      if (!res.ok) throw new Error(`list-changes failed ${res.status}`);
+      data = await res.json();
+    } catch (err) {
+      console.error("[calendar pull]", err);
+      return;
+    }
+    if (!data || data.skipped) return;
+
+    const events = Array.isArray(data.events) ? data.events : [];
+    if (events.length) {
+      state.calendarSyncFailures = [];
+      const index = buildCalendarEventIndex();
+      for (const event of events) {
+        const match = index.get(event.id);
+        if (match) {
+          await applyCalendarEventToKnownSession(match, event);
+        } else if (event.status !== "cancelled") {
+          await tryImportCalendarEventAsNewSession(event);
+        }
+      }
+      if (state.calendarSyncFailures.length) render();
+    }
+
+    try {
+      if (data.syncedAt) window.localStorage.setItem(CALENDAR_LAST_SYNC_STORAGE_KEY, data.syncedAt);
+    } catch (_) {
+      // localStorage 를 못 쓰는 환경이면 다음 접속 때 기본 조회 범위(최근 30일)로 다시 확인합니다.
+    }
+  }
+
   async function addStudentRenewalHistory(studentId, entry) {
     const student = state.students.find((item) => item.id === studentId);
     if (!student) {
@@ -1736,6 +1972,10 @@
         });
       }
       render();
+      if (!calendarPullRequested) {
+        calendarPullRequested = true;
+        pullCalendarChanges().catch((err) => console.error("[calendar pull]", err));
+      }
     });
   }
 
@@ -2108,6 +2348,9 @@
     if (state.route === "students") {
       main.innerHTML = renderStudentsView();
       bindStudentsViewEvents();
+    } else if (state.route === "calendar") {
+      main.innerHTML = renderCalendarView();
+      bindCalendarViewEvents();
     } else if (state.route === "sales") {
       main.innerHTML = renderSalesView();
       bindSalesViewEvents();
@@ -3909,6 +4152,50 @@
       </section>
 
       ${
+        state.calendarSyncFailures.length
+          ? `
+        <section class="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4" role="alert">
+          <div class="flex items-start justify-between gap-3">
+            <div class="flex items-start gap-3">
+              <span class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600">
+                <i class="fa-solid fa-calendar-xmark"></i>
+              </span>
+              <div>
+                <p class="text-sm font-semibold text-amber-900">
+                  캘린더 일정 ${formatNumber(state.calendarSyncFailures.length)}건을 사이트에 반영하지 못했습니다
+                </p>
+                <p class="mt-1 text-xs text-amber-700">
+                  제목 형식(예: "[강사명] 학생명 3회차")을 확인하거나, 사이트에서 직접 회차를 입력해 주세요.
+                </p>
+                <ul class="mt-2 space-y-1 text-xs text-amber-800">
+                  ${state.calendarSyncFailures
+                    .map(
+                      (failure) => `
+                    <li>
+                      · <span class="font-medium">${escapeHtml(failure.summary)}</span>${
+                        failure.sessionDate ? ` (${escapeHtml(String(failure.sessionDate).slice(0, 10))})` : ""
+                      } — ${escapeHtml(failure.reason)}
+                    </li>
+                  `
+                    )
+                    .join("")}
+                </ul>
+              </div>
+            </div>
+            <button
+              type="button"
+              id="btn-dismiss-calendar-sync-failures"
+              class="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100"
+            >
+              닫기
+            </button>
+          </div>
+        </section>
+      `
+          : ""
+      }
+
+      ${
         activeDashboardFilterLabel
           ? `<section class="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-800">
               <span><strong>${escapeHtml(activeDashboardFilterLabel)}</strong> 학생만 표시 중 (${formatNumber(
@@ -5548,6 +5835,398 @@
   }
 
 
+  /* ----------------------------------------------------------
+   * 5-4. 캘린더 보기 (구글 캘린더와 연동된 학생 수업 일정을 달력 형식으로 확인)
+   * ---------------------------------------------------------- */
+  function getCalendarMonthCursor() {
+    return state.calendarMonthCursor || todayISO().slice(0, 7);
+  }
+
+  function shiftCalendarMonth(monthCursor, delta) {
+    const [year, month] = monthCursor.split("-").map(Number);
+    const d = new Date(year, month - 1 + delta, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  }
+
+  // 달력에 표시할 주 단위 그리드. 해당 월의 1일이 포함된 주의 일요일부터, 말일이 포함된
+  // 주의 토요일까지 (즉, 앞/뒤로 다른 달의 날짜도 일부 채워 항상 7의 배수가 되게) 반환합니다.
+  function buildCalendarMonthWeeks(monthCursor) {
+    const [year, month] = monthCursor.split("-").map(Number);
+    const gridStart = new Date(year, month - 1, 1);
+    gridStart.setDate(gridStart.getDate() - gridStart.getDay());
+    const lastOfMonth = new Date(year, month, 0);
+    const gridEnd = new Date(lastOfMonth);
+    gridEnd.setDate(gridEnd.getDate() + (6 - gridEnd.getDay()));
+
+    const days = [];
+    for (const d = new Date(gridStart); d <= gridEnd; d.setDate(d.getDate() + 1)) {
+      days.push(dateObjectToISO(d));
+    }
+    const weeks = [];
+    for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i + 7));
+    return weeks;
+  }
+
+  // 모든 학생의 회차(sessionRecords)를 날짜별 수업 이벤트로 펼칩니다. 회차 자체는
+  // 구글 캘린더와 양방향 동기화되어 있으므로(api/calendar/sync-session, list-changes),
+  // 이 목록이 곧 구글 캘린더에 반영된 수업 일정과 같습니다. 휴강 회차에 보강일이
+  // 지정되어 있으면 보강일에도 별도 이벤트로 표시합니다.
+  function collectCalendarSessionEvents(instructorFilter) {
+    const events = [];
+    (state.students || []).forEach((student) => {
+      const instructor = student.assignedInstructor || "미배정";
+      if (instructorFilter && instructorFilter !== "all" && instructor !== instructorFilter) return;
+      (student.sessionRecords || []).forEach((record) => {
+        const baseEvent = {
+          studentId: student.id,
+          studentName: student.name || "이름 미입력",
+          instructor,
+          location: student.location || "",
+          sessionNumber: record.sessionNumber,
+          startTime: record.startTime,
+          endTime: record.endTime,
+        };
+        const sessionDate = String(record.sessionDate || "").slice(0, 10);
+        if (sessionDate) {
+          events.push(
+            Object.assign({}, baseEvent, {
+              date: sessionDate,
+              isCompleted: record.isCompleted,
+              kind: record.isCancelled ? "cancelled" : "class",
+            })
+          );
+        }
+        const makeupDate = String(record.makeupDate || "").slice(0, 10);
+        if (record.isCancelled && makeupDate) {
+          events.push(
+            Object.assign({}, baseEvent, {
+              date: makeupDate,
+              isCompleted: false,
+              kind: "makeup",
+            })
+          );
+        }
+      });
+    });
+    return events;
+  }
+
+  function groupCalendarEventsByDate(events) {
+    const map = new Map();
+    events.forEach((event) => {
+      if (!map.has(event.date)) map.set(event.date, []);
+      map.get(event.date).push(event);
+    });
+    map.forEach((list) => list.sort((a, b) => (a.startTime || "").localeCompare(b.startTime || "")));
+    return map;
+  }
+
+  function countCalendarSessionsByInstructor(monthCursor, instructorKey) {
+    const monthEvents = collectCalendarSessionEvents("all").filter((e) => e.date.slice(0, 7) === monthCursor);
+    if (instructorKey === "all") return monthEvents.length;
+    return monthEvents.filter((e) => e.instructor === instructorKey).length;
+  }
+
+  function renderCalendarInstructorFilterBar(monthCursor) {
+    const options = [{ key: "all", label: "전체" }, ...INSTRUCTORS.map((name) => ({ key: name, label: name }))];
+    return `
+      <section class="mb-4 flex flex-wrap gap-2">
+        ${options
+          .map((item) => {
+            const isActive = state.calendarInstructorFilter === item.key;
+            return `
+              <button
+                type="button"
+                class="calendar-instructor-filter-btn inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium transition ${
+                  isActive
+                    ? "border-brand-500 bg-brand-50 text-brand-700"
+                    : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                }"
+                data-calendar-instructor-filter="${escapeHtml(item.key)}"
+              >
+                <span>${escapeHtml(item.label)}</span>
+                <span class="inline-flex min-w-[1.5rem] items-center justify-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">
+                  ${formatNumber(countCalendarSessionsByInstructor(monthCursor, item.key))}
+                </span>
+              </button>
+            `;
+          })
+          .join("")}
+      </section>
+    `;
+  }
+
+  function renderCalendarEventChip(event) {
+    let classes = "border-slate-200 bg-slate-50 text-slate-700";
+    let statusLabel = "";
+    if (event.kind === "cancelled") {
+      classes = "border-rose-200 bg-rose-50 text-rose-500 line-through decoration-rose-300";
+      statusLabel = "휴강";
+    } else if (event.kind === "makeup") {
+      classes = "border-amber-200 bg-amber-50 text-amber-700";
+      statusLabel = "보강";
+    } else if (event.isCompleted) {
+      classes = "border-emerald-200 bg-emerald-50 text-emerald-700";
+    }
+    const timeLabel = event.startTime || "";
+    const titleText = `${event.studentName} · ${buildScheduledTimeRangeText(event.startTime, event.endTime) || "시간 미정"}${
+      statusLabel ? ` (${statusLabel})` : ""
+    }`;
+    return `
+      <button
+        type="button"
+        class="calendar-event-chip block w-full truncate rounded-md border px-1.5 py-0.5 text-left text-[11px] font-medium transition hover:opacity-80 ${classes}"
+        data-calendar-date="${escapeHtml(event.date)}"
+        title="${escapeHtml(titleText)}"
+      >${timeLabel ? `<span class="mr-1 tabular-nums">${escapeHtml(timeLabel)}</span>` : ""}${escapeHtml(
+      event.studentName
+    )}</button>
+    `;
+  }
+
+  function renderCalendarDayCell(dateIso, monthCursor, eventsForDate) {
+    const inMonth = dateIso.slice(0, 7) === monthCursor;
+    const isToday = dateIso === todayISO();
+    const isSelected = state.calendarSelectedDate === dateIso;
+    const maxShown = 3;
+    const shown = eventsForDate.slice(0, maxShown);
+    const remaining = eventsForDate.length - shown.length;
+    const dayNumber = Number(dateIso.slice(8, 10));
+
+    return `
+      <div
+        class="calendar-day-cell flex min-h-[92px] flex-col gap-1 rounded-lg border p-1.5 text-left transition sm:min-h-[112px] sm:p-2 ${
+          inMonth ? "bg-white" : "bg-slate-50/60"
+        } ${isSelected ? "border-brand-400 ring-2 ring-brand-200" : "border-slate-200 hover:border-slate-300"}"
+        data-calendar-date="${escapeHtml(dateIso)}"
+        role="button"
+        tabindex="0"
+      >
+        <div class="flex items-center justify-between">
+          <span class="flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ${
+            isToday ? "bg-brand-600 text-white" : inMonth ? "text-slate-700" : "text-slate-400"
+          }">
+            ${dayNumber}
+          </span>
+          ${
+            eventsForDate.length
+              ? `<span class="text-[10px] font-medium text-slate-400">${eventsForDate.length}건</span>`
+              : ""
+          }
+        </div>
+        <div class="flex flex-1 flex-col gap-1 overflow-hidden">
+          ${shown.map((event) => renderCalendarEventChip(event)).join("")}
+          ${
+            remaining > 0
+              ? `<span class="px-1 text-[11px] font-medium text-slate-400">+${remaining}개 더보기</span>`
+              : ""
+          }
+        </div>
+      </div>
+    `;
+  }
+
+  function renderCalendarDayDetailPanel(eventsByDate) {
+    const selectedDate = state.calendarSelectedDate;
+    if (!selectedDate) return "";
+    const events = eventsByDate.get(selectedDate) || [];
+    const d = new Date(selectedDate);
+    const weekdayLabel = Number.isNaN(d.getTime()) ? "" : WEEKDAYS[d.getDay()];
+
+    return `
+      <section class="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-6">
+        <div class="mb-3 flex items-center justify-between">
+          <div>
+            <p class="text-sm font-semibold text-slate-900">
+              ${formatDate(selectedDate)}${weekdayLabel ? ` (${weekdayLabel})` : ""} 수업 일정
+            </p>
+            <p class="mt-0.5 text-xs text-slate-500">
+              ${events.length ? `총 ${formatNumber(events.length)}건` : "예정된 수업이 없습니다."}
+            </p>
+          </div>
+          <button
+            type="button"
+            id="btn-close-calendar-day-detail"
+            class="rounded-md p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+            aria-label="닫기"
+          >
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+        ${
+          events.length
+            ? `<ul class="space-y-2">
+                ${events
+                  .map(
+                    (event) => `
+                  <li class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 px-3 py-2.5">
+                    <div class="min-w-0">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <span class="text-sm font-semibold text-slate-900">${escapeHtml(event.studentName)}</span>
+                        <span class="text-xs text-slate-500">${formatNumber(event.sessionNumber)}회차</span>
+                        ${
+                          event.kind === "cancelled"
+                            ? `<span class="inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-medium text-rose-700">휴강/취소</span>`
+                            : ""
+                        }
+                        ${
+                          event.kind === "makeup"
+                            ? `<span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">보강</span>`
+                            : ""
+                        }
+                        ${
+                          event.kind === "class" && event.isCompleted
+                            ? `<span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">완료</span>`
+                            : ""
+                        }
+                      </div>
+                      <p class="mt-0.5 truncate text-xs text-slate-500">
+                        ${escapeHtml(event.instructor)} 선생님${
+                      buildScheduledTimeRangeText(event.startTime, event.endTime)
+                        ? ` · ${escapeHtml(buildScheduledTimeRangeText(event.startTime, event.endTime))}`
+                        : ""
+                    }${event.location ? ` · ${escapeHtml(event.location)}` : ""}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      class="calendar-open-student-detail shrink-0 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                      data-student-id="${escapeHtml(event.studentId)}"
+                    >
+                      학생 상세
+                    </button>
+                  </li>
+                `
+                  )
+                  .join("")}
+              </ul>`
+            : `<p class="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-center text-sm text-slate-400">이 날짜에 등록된 수업이 없습니다.</p>`
+        }
+      </section>
+    `;
+  }
+
+  function renderCalendarView() {
+    const monthCursor = getCalendarMonthCursor();
+    const [year, month] = monthCursor.split("-").map(Number);
+    const weeks = buildCalendarMonthWeeks(monthCursor);
+    const events = collectCalendarSessionEvents(state.calendarInstructorFilter);
+    const eventsByDate = groupCalendarEventsByDate(events);
+    const monthEventCount = events.filter((e) => e.date.slice(0, 7) === monthCursor).length;
+
+    return `
+      <section class="mb-6 flex flex-col gap-1 md:flex-row md:items-end md:justify-between">
+        <div>
+          <h2 class="text-xl font-semibold text-slate-900 md:text-2xl">수업 일정</h2>
+          <p class="mt-1 text-sm text-slate-500">
+            구글 캘린더와 연동된 학생 수업 일정을 달력 형식으로 확인하세요.
+          </p>
+        </div>
+      </section>
+
+      ${renderCalendarInstructorFilterBar(monthCursor)}
+
+      <section class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-6">
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center gap-1">
+            <button
+              type="button"
+              id="btn-calendar-prev-month"
+              class="flex h-9 w-9 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"
+              aria-label="이전 달"
+            >
+              <i class="fa-solid fa-chevron-left"></i>
+            </button>
+            <button
+              type="button"
+              id="btn-calendar-next-month"
+              class="flex h-9 w-9 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"
+              aria-label="다음 달"
+            >
+              <i class="fa-solid fa-chevron-right"></i>
+            </button>
+            <h3 class="ml-2 text-base font-semibold text-slate-900">${year}년 ${month}월</h3>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="hidden text-xs text-slate-500 sm:inline">이번 달 수업 ${formatNumber(monthEventCount)}건</span>
+            <button
+              type="button"
+              id="btn-calendar-today"
+              class="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+            >
+              오늘
+            </button>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-7 gap-1 text-center text-xs font-semibold text-slate-500 sm:gap-2">
+          ${WEEKDAYS.map((w) => `<div class="py-1">${w}</div>`).join("")}
+        </div>
+        <div class="mt-1 grid grid-cols-7 gap-1 sm:gap-2">
+          ${weeks
+            .flat()
+            .map((dateIso) => renderCalendarDayCell(dateIso, monthCursor, eventsByDate.get(dateIso) || []))
+            .join("")}
+        </div>
+      </section>
+
+      ${renderCalendarDayDetailPanel(eventsByDate)}
+    `;
+  }
+
+  function bindCalendarViewEvents() {
+    document.getElementById("btn-calendar-prev-month")?.addEventListener("click", () => {
+      state.calendarMonthCursor = shiftCalendarMonth(getCalendarMonthCursor(), -1);
+      render();
+    });
+    document.getElementById("btn-calendar-next-month")?.addEventListener("click", () => {
+      state.calendarMonthCursor = shiftCalendarMonth(getCalendarMonthCursor(), 1);
+      render();
+    });
+    document.getElementById("btn-calendar-today")?.addEventListener("click", () => {
+      state.calendarMonthCursor = "";
+      render();
+    });
+    document.getElementById("btn-close-calendar-day-detail")?.addEventListener("click", () => {
+      state.calendarSelectedDate = null;
+      render();
+    });
+    document.querySelectorAll("[data-calendar-instructor-filter]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.calendarInstructorFilter = btn.dataset.calendarInstructorFilter;
+        render();
+      });
+    });
+    document.querySelectorAll(".calendar-day-cell").forEach((cell) => {
+      const selectDate = () => {
+        const date = cell.dataset.calendarDate;
+        state.calendarSelectedDate = state.calendarSelectedDate === date ? null : date;
+        render();
+      };
+      cell.addEventListener("click", (e) => {
+        if (e.target.closest(".calendar-event-chip")) return; // chip 은 자체 핸들러가 처리
+        selectDate();
+      });
+      cell.addEventListener("keydown", (e) => {
+        if (e.target !== cell) return;
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        selectDate();
+      });
+    });
+    document.querySelectorAll(".calendar-event-chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        state.calendarSelectedDate = chip.dataset.calendarDate;
+        render();
+      });
+    });
+    document.querySelectorAll(".calendar-open-student-detail").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        openStudentDetailModal(btn.dataset.studentId);
+      });
+    });
+  }
+
   /* ==========================================================
    * 6. 필터 / 검색
    * ========================================================== */
@@ -5717,6 +6396,14 @@
         }
       });
     });
+
+    const dismissCalendarSyncFailuresBtn = document.getElementById("btn-dismiss-calendar-sync-failures");
+    if (dismissCalendarSyncFailuresBtn) {
+      dismissCalendarSyncFailuresBtn.addEventListener("click", () => {
+        state.calendarSyncFailures = [];
+        render();
+      });
+    }
 
     const clearDashboardFilterBtn = document.getElementById("btn-clear-dashboard-filter");
     if (clearDashboardFilterBtn) {
@@ -7204,6 +7891,7 @@
         state.isStudentsLoading = false;
         state.isStudentTabsLoading = false;
         state.isCounselingLoading = false;
+        calendarPullRequested = false;
         showLogin();
       }
     });
