@@ -4621,7 +4621,6 @@
                   isExpanded ? "rotate-180" : ""
                 }"></i>
               </div>
-              <p class="hidden truncate text-xs text-slate-500 md:block">${escapeHtml(s.region || "지역 미입력")}</p>
             </div>
           </div>
         </td>
