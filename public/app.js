@@ -1276,6 +1276,7 @@
       state.calendarSyncFailures = [];
       const index = buildCalendarEventIndex();
       for (const event of events) {
+        if (String(event.summary || "").includes("차이홍")) continue; // 사이트 동기화 대상 아님
         const match = index.get(event.id);
         if (match) {
           await applyCalendarEventToKnownSession(match, event);
