@@ -967,20 +967,31 @@
     return headers;
   }
 
-  // Re-reads state.students at write time and merges only the given field into a
-  // single session record, so a slower Calendar round-trip can never clobber a
-  // sessionRecords array that a different, faster edit already saved in the meantime.
-  async function applySessionRecordFieldSilently(studentId, sessionNumber, fieldPatch) {
+  // 최신 state.students 위에 fieldPatch 하나만 병합해 반영합니다(있으면 payload 반환,
+  // 회차가 사라졌으면 null). 아래에서 낙관적 반영과 "쓰기 직전 재병합"에 공용으로 씁니다.
+  function mergeSessionRecordFieldOntoLatest(studentId, sessionNumber, fieldPatch) {
     const student = state.students.find((item) => item.id === studentId);
-    if (!student) return;
+    if (!student) return null;
     const current = normalizeSessionRecords(student.sessionRecords);
     const map = new Map(current.map((item) => [item.sessionNumber, item]));
     const record = map.get(sessionNumber);
-    if (!record) return; // session was cleared/removed since — nothing to attach the id to
+    if (!record) return null; // session was cleared/removed since — nothing to attach the id to
     map.set(sessionNumber, Object.assign({}, record, fieldPatch));
     const payload = normalizeSessionRecords(Array.from(map.values()));
     student.sessionRecords = payload;
+    return payload;
+  }
+
+  // 캘린더 동기화(POST)가 끝난 뒤 생성된 이벤트 id를 회차에 조용히 붙여줍니다.
+  // 이 write-back 은 saveStudentSessionRecord 같은 사용자 직접 수정과 동시에 일어날 수 있어,
+  // Firestore 에 쓰기 직전 최신 상태 위에 다시 한 번 병합합니다 — 그래야 이 함수가
+  // 네트워크 왕복을 기다리는 사이 사용자가 저장한 다른 변경(예: 휴강/취소 체크)을
+  // 통째로 덮어써 버리는 일이 없습니다.
+  async function applySessionRecordFieldSilently(studentId, sessionNumber, fieldPatch) {
+    if (!mergeSessionRecordFieldOntoLatest(studentId, sessionNumber, fieldPatch)) return;
     try {
+      const payload = mergeSessionRecordFieldOntoLatest(studentId, sessionNumber, fieldPatch);
+      if (!payload) return;
       await updateStudent(studentId, { sessionRecords: payload });
     } catch (err) {
       console.error("[calendar sync write-back]", err);
@@ -1086,12 +1097,11 @@
     });
   }
 
-  // 세션 레코드를 병합·생성합니다. 이미 있는 회차면 필드만 갱신하고, 없는 회차(캘린더에서
-  // 직접 만든 새 일정)면 새로 만듭니다. 캘린더 → 사이트 방향 전용이라 다시 캘린더로
-  // 되쏘지 않습니다(syncSessionCalendarEvent 를 부르지 않음).
-  async function upsertSessionRecordFromCalendar(studentId, sessionNumber, fields) {
+  // 최신 state.students 위에 세션 하나를 병합·생성합니다. 이미 있는 회차면 필드만
+  // 갱신하고, 없는 회차(캘린더에서 직접 만든 새 일정)면 새로 만듭니다.
+  function mergeCalendarSessionOntoLatest(studentId, sessionNumber, fields) {
     const student = state.students.find((item) => item.id === studentId);
-    if (!student) return;
+    if (!student) return null;
     const current = normalizeSessionRecords(student.sessionRecords);
     const map = new Map(current.map((item) => [item.sessionNumber, item]));
     const existing = map.get(sessionNumber) || {
@@ -1108,11 +1118,25 @@
     const payload = normalizeSessionRecords(Array.from(map.values()));
     student.sessionRecords = payload;
     student.lastClassDate = getLatestCompletedSessionDate(payload);
+    return payload;
+  }
+
+  // 캘린더 → 사이트 방향 전용이라 다시 캘린더로 되쏘지 않습니다(syncSessionCalendarEvent
+  // 를 부르지 않음). pullCalendarChanges 가 이벤트를 여러 개 순회하며 매번 네트워크
+  // 왕복(await updateStudent)을 기다리는데, 그 사이 사용자가 saveStudentSessionRecord 로
+  // 같은 학생의 다른 회차(또는 같은 회차)를 직접 저장할 수 있습니다. Firestore 에 실제로
+  // 쓰기 직전 최신 상태 위에 다시 한 번 병합해야, 늦게 도착하는 이 배경 동기화 쓰기가
+  // 사용자의 최신 저장을 통째로 덮어쓰지 않습니다.
+  async function upsertSessionRecordFromCalendar(studentId, sessionNumber, fields) {
+    if (!mergeCalendarSessionOntoLatest(studentId, sessionNumber, fields)) return;
     render();
     try {
+      const payload = mergeCalendarSessionOntoLatest(studentId, sessionNumber, fields);
+      if (!payload) return;
+      const student = state.students.find((item) => item.id === studentId);
       await updateStudent(studentId, {
         sessionRecords: payload,
-        lastClassDate: student.lastClassDate,
+        lastClassDate: student ? student.lastClassDate : "",
       });
     } catch (err) {
       console.error("[calendar pull write-back]", err);
