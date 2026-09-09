@@ -6034,10 +6034,17 @@
     const weekdayLabel = Number.isNaN(d.getTime()) ? "" : WEEKDAYS[d.getDay()];
 
     return `
-      <section class="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-6">
+      <div
+        id="calendar-day-detail-modal"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="calendar-day-detail-title"
+      >
+        <section class="app-modal-panel flex max-h-[85vh] min-h-0 w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white p-4 shadow-2xl md:p-6">
         <div class="mb-3 flex items-center justify-between">
           <div>
-            <p class="text-sm font-semibold text-slate-900">
+            <p id="calendar-day-detail-title" class="text-sm font-semibold text-slate-900">
               ${formatDate(selectedDate)}${weekdayLabel ? ` (${weekdayLabel})` : ""} 수업 일정
             </p>
             <p class="mt-0.5 text-xs text-slate-500">
@@ -6053,6 +6060,7 @@
             <i class="fa-solid fa-xmark"></i>
           </button>
         </div>
+        <div class="min-h-0 flex-1 overflow-y-auto">
         ${
           events.length
             ? `<ul class="space-y-2">
@@ -6102,7 +6110,9 @@
               </ul>`
             : `<p class="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-center text-sm text-slate-400">이 날짜에 등록된 수업이 없습니다.</p>`
         }
-      </section>
+        </div>
+        </section>
+      </div>
     `;
   }
 
@@ -6188,6 +6198,11 @@
       render();
     });
     document.getElementById("btn-close-calendar-day-detail")?.addEventListener("click", () => {
+      state.calendarSelectedDate = null;
+      render();
+    });
+    document.getElementById("calendar-day-detail-modal")?.addEventListener("click", (e) => {
+      if (e.target.id !== "calendar-day-detail-modal") return; // 배경 클릭 시에만 닫기
       state.calendarSelectedDate = null;
       render();
     });
@@ -8226,6 +8241,11 @@
       // 확인 모달은 다른 모달 위에 겹쳐 뜰 수 있어 항상 가장 먼저 닫습니다.
       if (document.getElementById("confirm-modal")?.classList.contains("modal-open")) {
         document.getElementById("confirm-cancel")?.click();
+        return;
+      }
+      if (document.getElementById("calendar-day-detail-modal")) {
+        state.calendarSelectedDate = null;
+        render();
         return;
       }
       if (document.getElementById("refund-sheet-modal")?.classList.contains("modal-open")) {
