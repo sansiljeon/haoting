@@ -1,10 +1,19 @@
 import { googleFetch, isGoogleConfigured, requireInternalToken } from "../lib/google-auth.js";
 import { requireFirebaseAuth } from "../lib/firebase-auth.js";
 
-// How far back to look on a client's very first pull (no `updatedMin` checkpoint yet).
-// Wide enough to catch edits to recently-scheduled sessions without listing the whole calendar.
-const DEFAULT_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_PAGES = 5; // guards against a runaway loop; a small tutoring calendar never needs this many
+
+// How far back to look on a client's very first pull (no `updatedMin` checkpoint yet), and what
+// to fall back to when a checkpoint is rejected. Google enforces an *undocumented,
+// calendar-specific* retention window on how far back `updatedMin` may reach (410
+// updatedMinTooLongAgo beyond it) — it isn't a fixed number we can hardcode, so instead of
+// guessing one value we fall back through progressively shorter windows until one is accepted.
+const FALLBACK_LOOKBACKS_MS = [
+  30 * 24 * 60 * 60 * 1000, // 30 days
+  3 * 24 * 60 * 60 * 1000, // 3 days
+  24 * 60 * 60 * 1000, // 1 day
+  60 * 60 * 1000, // 1 hour
+];
 
 function eventsBaseUrl(calendarId) {
   return `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
@@ -24,10 +33,13 @@ export default async function handler(req, res) {
     return;
   }
 
-  const defaultUpdatedMin = new Date(Date.now() - DEFAULT_LOOKBACK_MS).toISOString();
   const updatedMinParam = String(req.query?.updatedMin || "").trim();
-  const updatedMin =
-    updatedMinParam && !Number.isNaN(Date.parse(updatedMinParam)) ? updatedMinParam : defaultUpdatedMin;
+  const clientUpdatedMin =
+    updatedMinParam && !Number.isNaN(Date.parse(updatedMinParam)) ? updatedMinParam : null;
+  const candidates = [
+    ...(clientUpdatedMin ? [clientUpdatedMin] : []),
+    ...FALLBACK_LOOKBACKS_MS.map((ms) => new Date(Date.now() - ms).toISOString()),
+  ];
 
   // Read is captured before the request so events edited while we're paginating
   // are still safely covered by the next poll instead of silently skipped.
@@ -35,19 +47,21 @@ export default async function handler(req, res) {
 
   try {
     let events;
-    try {
-      events = await fetchAllEvents(calendarId, updatedMin);
-    } catch (err) {
-      // Google rejects an `updatedMin` that's too far in the past (410 updatedMinTooLongAgo),
-      // which happens when a client's stored checkpoint goes stale (e.g. long absence). Without
-      // this fallback the client never gets a fresh syncedAt to save, so it resends the same bad
-      // value and 502s forever. Retry once with the default window instead of hard-failing.
-      if (err?.status === 410 && updatedMin !== defaultUpdatedMin) {
-        events = await fetchAllEvents(calendarId, defaultUpdatedMin);
-      } else {
-        throw err;
+    let lastErr;
+    for (const candidate of candidates) {
+      try {
+        events = await fetchAllEvents(calendarId, candidate);
+        lastErr = null;
+        break;
+      } catch (err) {
+        // A stale/too-old `updatedMin` (410 updatedMinTooLongAgo) is the one failure mode worth
+        // retrying with a narrower window — anything else (auth, network, quota) won't be fixed
+        // by shrinking the range, so surface it immediately instead of burning through candidates.
+        if (err?.status !== 410) throw err;
+        lastErr = err;
       }
     }
+    if (lastErr) throw lastErr;
     res.status(200).json({ events, syncedAt });
   } catch (err) {
     console.error("[api/calendar/list-changes]", err);

@@ -168,12 +168,13 @@ describe("api/calendar/list-changes", () => {
     expect(res.statusCode).toBe(502);
   });
 
-  it("retries with the default lookback when Google rejects a stale client updatedMin (410)", async () => {
+  it("retries with progressively shorter windows when Google rejects a stale client updatedMin (410)", async () => {
+    const tooOld = () => Object.assign(new Error("Google API 410: updatedMinTooLongAgo"), { status: 410 });
     vi.mocked(googleFetch)
-      .mockRejectedValueOnce(
-        Object.assign(new Error("Google API 410: updatedMinTooLongAgo"), { status: 410 })
-      )
-      .mockResolvedValueOnce({ items: [{ id: "evt-1", status: "confirmed" }] });
+      .mockRejectedValueOnce(tooOld()) // client's own value
+      .mockRejectedValueOnce(tooOld()) // 30 days
+      .mockRejectedValueOnce(tooOld()) // 3 days
+      .mockResolvedValueOnce({ items: [{ id: "evt-1", status: "confirmed" }] }); // 1 day
     const res = makeRes();
     await handler(
       { method: "GET", headers: {}, query: { updatedMin: "2020-01-01T00:00:00.000Z" } },
@@ -181,33 +182,28 @@ describe("api/calendar/list-changes", () => {
     );
     expect(res.statusCode).toBe(200);
     expect(res.body.events.map((e) => e.id)).toEqual(["evt-1"]);
-    expect(googleFetch).toHaveBeenCalledTimes(2);
-    const retryUrl = vi.mocked(googleFetch).mock.calls[1][0];
-    const retryUpdatedMin = new URL(retryUrl).searchParams.get("updatedMin");
-    expect(retryUpdatedMin).not.toBe("2020-01-01T00:00:00.000Z");
-    const ageMs = Date.now() - Date.parse(retryUpdatedMin);
-    expect(ageMs).toBeLessThan(31 * 24 * 60 * 60 * 1000);
+    expect(googleFetch).toHaveBeenCalledTimes(4);
+    const lastUpdatedMin = new URL(vi.mocked(googleFetch).mock.calls[3][0]).searchParams.get("updatedMin");
+    const ageMs = Date.now() - Date.parse(lastUpdatedMin);
+    expect(ageMs).toBeGreaterThan(23 * 60 * 60 * 1000);
+    expect(ageMs).toBeLessThan(25 * 60 * 60 * 1000);
     // syncedAt is still fresh so the client can save it and stop resending the stale checkpoint.
     expect(Date.now() - Date.parse(res.body.syncedAt)).toBeLessThan(5000);
   });
 
-  it("responds 502 when the 410 retry with the default lookback also fails", async () => {
+  it("responds 502 when every fallback window is also rejected", async () => {
     vi.mocked(googleFetch).mockRejectedValue(
       Object.assign(new Error("Google API 410: updatedMinTooLongAgo"), { status: 410 })
     );
     const res = makeRes();
-    await handler(
-      { method: "GET", headers: {}, query: { updatedMin: "2020-01-01T00:00:00.000Z" } },
-      res
-    );
+    await handler({ method: "GET", headers: {}, query: {} }, res);
     expect(res.statusCode).toBe(502);
-    expect(googleFetch).toHaveBeenCalledTimes(2);
+    // no client value supplied, so only the 4 fallback windows are tried
+    expect(googleFetch).toHaveBeenCalledTimes(4);
   });
 
-  it("does not retry on a 410 when the client already used the default lookback", async () => {
-    vi.mocked(googleFetch).mockRejectedValue(
-      Object.assign(new Error("Google API 410: updatedMinTooLongAgo"), { status: 410 })
-    );
+  it("does not retry a non-410 error even if later candidates might have worked", async () => {
+    vi.mocked(googleFetch).mockRejectedValue(Object.assign(new Error("boom"), { status: 403 }));
     const res = makeRes();
     await handler({ method: "GET", headers: {}, query: {} }, res);
     expect(res.statusCode).toBe(502);
