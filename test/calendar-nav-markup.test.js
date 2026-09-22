@@ -24,6 +24,6 @@ describe('calendar nav markup', () => {
     const navButton = navMenu.querySelector('[data-route="calendar"]');
 
     expect(navButton).not.toBeNull();
-    expect(navMenu.querySelectorAll('.nav-item').length).toBeGreaterThanOrEqual(6);
+    expect(navMenu.querySelectorAll('.nav-item').length).toBeGreaterThanOrEqual(5);
   });
 });

@@ -123,7 +123,8 @@
   }
 
   const state = {
-    route: "students", // "counseling" | "students" | "calendar" | "sales" | "homework" | "study"
+    route: "students", // "counseling" | "students" | "calendar" | "sales" | "records"
+    recordsTab: "homework", // 학습/숙제 기록 화면 내부 탭: "homework" | "study"
     students: [],
     isStudentsLoading: true, // Firestore 첫 스냅샷 도착 전까지 true
     counselingRecords: [],
@@ -2363,11 +2364,9 @@
     });
     // Sheets has no realtime push like Firestore's onSnapshot, so fetch once per
     // route-entry here (not inside render(), which fires on nearly every input).
-    if (route === "homework" && !state.homeworkRecordsLoadedOnce && !state.homeworkRecordsLoading) {
-      loadHomeworkRecords();
-    }
-    if (route === "study" && !state.studyRecordsLoadedOnce && !state.studyRecordsLoading) {
-      loadStudyRecords();
+    if (route === "records") {
+      if (!state.homeworkRecordsLoadedOnce && !state.homeworkRecordsLoading) loadHomeworkRecords();
+      if (!state.studyRecordsLoadedOnce && !state.studyRecordsLoading) loadStudyRecords();
     }
     render();
   }
@@ -2388,12 +2387,9 @@
     } else if (state.route === "counseling") {
       main.innerHTML = renderCounselingView();
       bindCounselingViewEvents();
-    } else if (state.route === "homework") {
-      main.innerHTML = renderHomeworkView();
-      bindHomeworkViewEvents();
-    } else if (state.route === "study") {
-      main.innerHTML = renderStudyView();
-      bindStudyViewEvents();
+    } else if (state.route === "records") {
+      main.innerHTML = renderRecordsView();
+      bindRecordsViewEvents();
     }
 
     syncStudentDetailModal();
@@ -4069,6 +4065,40 @@
   }
 
   /* ----------------------------------------------------------
+   * 5-0c. 학습/숙제 기록 화면 (탭으로 통합)
+   * ---------------------------------------------------------- */
+  function renderRecordsView() {
+    const tab = state.recordsTab === "study" ? "study" : "homework";
+    const tabButton = (value, label) => `
+      <button
+        type="button"
+        class="records-tab-btn ${tab === value ? "is-active" : ""}"
+        data-records-tab="${value}"
+      >
+        ${escapeHtml(label)}
+      </button>
+    `;
+    return `
+      <div class="records-tab-bar mb-6" role="tablist">
+        ${tabButton("homework", "숙제 기록")}
+        ${tabButton("study", "학습 기록")}
+      </div>
+      ${tab === "study" ? renderStudyView() : renderHomeworkView()}
+    `;
+  }
+
+  function bindRecordsViewEvents() {
+    document.querySelectorAll(".records-tab-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.recordsTab = btn.dataset.recordsTab === "study" ? "study" : "homework";
+        render();
+      });
+    });
+    if (state.recordsTab === "study") bindStudyViewEvents();
+    else bindHomeworkViewEvents();
+  }
+
+  /* ----------------------------------------------------------
    * 5-1. 학생 관리 화면
    * ---------------------------------------------------------- */
   function renderStudentsView() {
@@ -4789,6 +4819,94 @@
     ];
   }
 
+  function getStudentHomeworkRecords(student) {
+    return sortRecordsByDateDesc(state.homeworkRecords.filter((r) => r.studentName === student.name));
+  }
+
+  function getStudentStudyRecords(student) {
+    return sortRecordsByDateDesc(state.studyRecords.filter((r) => r.studentName === student.name));
+  }
+
+  function renderStudentDetailRecordItem(headChips, bodyLines) {
+    return `
+      <li class="student-detail-record-item">
+        <div class="student-detail-record-item-head">
+          ${headChips
+            .filter(Boolean)
+            .map((chip) => `<span>${escapeHtml(chip)}</span>`)
+            .join("")}
+        </div>
+        ${bodyLines
+          .filter((line) => line && line.value)
+          .map(
+            (line) =>
+              `<p class="student-detail-record-item-body">${escapeHtml(line.label)}: ${escapeHtml(line.value)}</p>`
+          )
+          .join("")}
+      </li>
+    `;
+  }
+
+  function renderStudentDetailRecordsGroup(title, records, isLoading, isLoadedOnce, emptyText, renderItem) {
+    let body;
+    if (isLoading && !isLoadedOnce) {
+      body = `<p class="student-detail-empty-note">불러오는 중…</p>`;
+    } else if (records.length === 0) {
+      body = `<p class="student-detail-empty-note">${escapeHtml(emptyText)}</p>`;
+    } else {
+      body = `<ul class="student-detail-record-list">${records.map(renderItem).join("")}</ul>`;
+    }
+    return `
+      <section class="student-detail-section">
+        <h3 class="student-detail-section-title">${escapeHtml(title)}</h3>
+        ${body}
+      </section>
+    `;
+  }
+
+  function renderStudentDetailHomeworkAndStudySections(student) {
+    const homeworkGroup = renderStudentDetailRecordsGroup(
+      "숙제 기록",
+      getStudentHomeworkRecords(student),
+      state.homeworkRecordsLoading,
+      state.homeworkRecordsLoadedOnce,
+      "등록된 숙제 기록이 없습니다.",
+      (r) =>
+        renderStudentDetailRecordItem(
+          [formatDate(r.classDate), r.classType, r.submitted || "미제출", r.checked || "미확인"],
+          [
+            { label: "숙제", value: r.homeworkText },
+            { label: "피드백", value: r.feedback },
+          ]
+        )
+    );
+
+    const studyGroup = renderStudentDetailRecordsGroup(
+      "학습 기록",
+      getStudentStudyRecords(student),
+      state.studyRecordsLoading,
+      state.studyRecordsLoadedOnce,
+      "등록된 학습 기록이 없습니다.",
+      (r) =>
+        renderStudentDetailRecordItem(
+          [
+            formatDate(r.classDate),
+            r.classType,
+            r.attendance,
+            r.comprehension || r.participation
+              ? `이해 ${r.comprehension || "-"} · 참여 ${r.participation || "-"}`
+              : "",
+          ],
+          [
+            { label: "주제", value: r.topic },
+            { label: "내용", value: r.content },
+          ]
+        )
+    );
+
+    return homeworkGroup + studyGroup;
+  }
+
   function renderStudentDetailModalContent(student) {
     const sections = getStudentDetailSections(student);
     const latestClassLabel =
@@ -4844,6 +4962,7 @@
         `
           )
           .join("")}
+        ${renderStudentDetailHomeworkAndStudySections(student)}
       </div>
     `;
   }
@@ -7217,6 +7336,8 @@
 
     state.detailStudentId = id;
     fillStudentDetailModal(student);
+    if (!state.homeworkRecordsLoadedOnce && !state.homeworkRecordsLoading) loadHomeworkRecords();
+    if (!state.studyRecordsLoadedOnce && !state.studyRecordsLoading) loadStudyRecords();
     modal.removeAttribute("hidden");
     modal.style.removeProperty("display");
     modal.classList.remove("hidden");

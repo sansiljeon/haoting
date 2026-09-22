@@ -304,6 +304,65 @@ textarea.form-input {
   }
 }
 
+.student-detail-record-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.student-detail-record-item {
+  border: 1px solid #e2e8f0;
+  border-radius: 0.8rem;
+  background: #f8fafc;
+  padding: 0.7rem 0.85rem;
+}
+
+.student-detail-record-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #334155;
+}
+
+.student-detail-record-item-body {
+  margin: 0.35rem 0 0;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: #475569;
+}
+
+.student-detail-empty-note {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+
+.records-tab-bar {
+  display: flex;
+  gap: 0.4rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.records-tab-btn {
+  border: none;
+  background: transparent;
+  padding: 0.65rem 0.25rem;
+  margin-bottom: -1px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #64748b;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.records-tab-btn.is-active {
+  color: #0f172a;
+  border-bottom-color: var(--brand-600, #2563eb);
+}
+
 /* ---- 토글 스위치 ---- */
 .toggle {
   position: relative;
