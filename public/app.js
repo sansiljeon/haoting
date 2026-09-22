@@ -5393,6 +5393,17 @@
                                   </div>
                                 </div>
 
+                                ${
+                                  !activeSlot.isCancelled &&
+                                  activeSlot.sessionDate &&
+                                  (!activeSlot.startTime || !activeSlot.endTime)
+                                    ? `<p class="mt-2 flex items-center gap-1.5 text-[11px] font-medium text-amber-600">
+                                        <i class="fa-solid fa-triangle-exclamation"></i>
+                                        시작·종료 시간을 모두 입력해야 구글 캘린더에 반영됩니다.
+                                      </p>`
+                                    : ""
+                                }
+
                                 <div class="session-message-box mt-4 rounded-lg border border-slate-200 bg-white/80 p-4">
                                   <div class="flex items-center justify-between gap-2">
                                     <p class="text-[11px] font-semibold text-slate-700">안내 문자</p>
