@@ -138,7 +138,7 @@
     studentTabs: [],
     isStudentTabsLoading: true,
     selectedStudentTabId: "all",
-    filter: "all", // "all" | "active"
+    filter: "active", // "all" | "active"
     keyword: "",
     courseTrackFilter: "all", // "all" | "basic" | "conversation" | "certification"
     instructorFilter: "all", // "all" | instructor name
@@ -8392,7 +8392,7 @@
     state.studentTabs = [];
     state.isStudentTabsLoading = true;
     state.selectedStudentTabId = "all";
-    state.filter = "all";
+    state.filter = "active";
     state.keyword = "";
     state.courseTrackFilter = "all";
     state.instructorFilter = "all";
