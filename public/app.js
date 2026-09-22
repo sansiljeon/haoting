@@ -159,6 +159,7 @@
     detailStudentId: null, // 읽기 전용 상세 모달에 표시 중인 학생 id
     detailCounselingId: null, // 읽기 전용 상담 상세 모달에 표시 중인 상담 기록 id
     calendarSyncFailures: [], // 구글 캘린더 → 사이트 반영에 실패한 일정 목록 { summary, sessionDate, startTime, endTime, reason }
+    calendarSyncFailuresExpanded: false, // 캘린더 반영 실패 경고 배너의 상세 목록 펼침 여부
     calendarMonthCursor: "", // 수업 일정 캘린더에서 보고 있는 달 ("" 이면 이번 달), "YYYY-MM"
     calendarSelectedDate: null, // 캘린더에서 선택되어 상세 목록이 열려 있는 날짜 ("YYYY-MM-DD")
     calendarInstructorFilter: "all", // 수업 일정 캘린더 강사 필터: "all" | 강사명
@@ -1274,6 +1275,7 @@
     const events = Array.isArray(data.events) ? data.events : [];
     if (events.length) {
       state.calendarSyncFailures = [];
+      state.calendarSyncFailuresExpanded = false;
       const index = buildCalendarEventIndex();
       for (const event of events) {
         if (String(event.summary || "").includes("차이홍")) continue; // 사이트 동기화 대상 아님
@@ -4185,14 +4187,23 @@
           ? `
         <section class="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4" role="alert">
           <div class="flex items-start justify-between gap-3">
-            <div class="flex items-start gap-3">
+            <button
+              type="button"
+              id="btn-toggle-calendar-sync-failures"
+              class="flex flex-1 items-start gap-3 text-left"
+              aria-expanded="${state.calendarSyncFailuresExpanded ? "true" : "false"}"
+            >
               <span class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600">
                 <i class="fa-solid fa-calendar-xmark"></i>
               </span>
-              <div>
-                <p class="text-sm font-semibold text-amber-900">
+              <div class="flex-1">
+                <p class="flex items-center gap-2 text-sm font-semibold text-amber-900">
                   캘린더 일정 ${formatNumber(state.calendarSyncFailures.length)}건을 사이트에 반영하지 못했습니다
+                  <i class="fa-solid fa-chevron-${state.calendarSyncFailuresExpanded ? "up" : "down"} text-xs text-amber-500"></i>
                 </p>
+                ${
+                  state.calendarSyncFailuresExpanded
+                    ? `
                 <p class="mt-1 text-xs text-amber-700">
                   제목 형식(예: "[강사명] 학생명 3회차")을 확인하거나, 사이트에서 직접 회차를 입력해 주세요.
                 </p>
@@ -4209,8 +4220,13 @@
                     )
                     .join("")}
                 </ul>
+                `
+                    : `
+                <p class="mt-1 text-xs text-amber-700">눌러서 자세히 보기</p>
+                `
+                }
               </div>
-            </div>
+            </button>
             <button
               type="button"
               id="btn-dismiss-calendar-sync-failures"
@@ -6747,6 +6763,15 @@
     if (dismissCalendarSyncFailuresBtn) {
       dismissCalendarSyncFailuresBtn.addEventListener("click", () => {
         state.calendarSyncFailures = [];
+        state.calendarSyncFailuresExpanded = false;
+        render();
+      });
+    }
+
+    const toggleCalendarSyncFailuresBtn = document.getElementById("btn-toggle-calendar-sync-failures");
+    if (toggleCalendarSyncFailuresBtn) {
+      toggleCalendarSyncFailuresBtn.addEventListener("click", () => {
+        state.calendarSyncFailuresExpanded = !state.calendarSyncFailuresExpanded;
         render();
       });
     }
