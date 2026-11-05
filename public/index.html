@@ -676,8 +676,17 @@
         </div>
         <div id="student-detail-modal-body" class="min-h-0 flex-1 overflow-y-auto px-6 py-5"></div>
         <div
-          class="relative z-10 flex shrink-0 items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-6 py-4"
+          class="relative z-10 flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-6 py-4"
         >
+          <button
+            type="button"
+            id="student-detail-records-btn"
+            data-student-id=""
+            class="inline-flex items-center gap-2 rounded-lg border border-brand-200 bg-white px-4 py-2 text-sm font-semibold text-brand-700 transition hover:bg-brand-50"
+          >
+            <i class="fa-solid fa-book-open"></i>
+            숙제/학습 기록 · 프린트
+          </button>
           <button
             type="button"
             id="student-detail-refund-btn"
@@ -690,6 +699,64 @@
           <button
             type="button"
             class="student-detail-close rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+          >
+            닫기
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============== 학생별 숙제/학습 기록 모달 ============== -->
+    <div
+      id="student-records-modal"
+      class="app-modal-shell fixed inset-0 z-[56] hidden items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="student-records-modal-title"
+    >
+      <div
+        class="app-modal-panel flex max-h-[90vh] min-h-0 w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+      >
+        <div class="flex items-start justify-between border-b border-slate-200 px-6 py-4">
+          <div>
+            <h2 id="student-records-modal-title" class="text-lg font-semibold text-slate-900">
+              숙제/학습 기록
+            </h2>
+            <p id="student-records-modal-subtitle" class="mt-0.5 text-sm text-slate-500">
+              이 학생의 숙제·학습 기록을 함께 확인하고 새로 작성할 수 있습니다.
+            </p>
+          </div>
+          <button
+            type="button"
+            class="student-records-modal-close rounded-md p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-600"
+            aria-label="닫기"
+          >
+            <i class="fa-solid fa-xmark text-lg"></i>
+          </button>
+        </div>
+        <div id="student-records-modal-body" class="min-h-0 flex-1 overflow-y-auto px-6 py-5"></div>
+        <div
+          class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-6 py-4"
+        >
+          <label class="mr-auto inline-flex min-h-11 cursor-pointer items-center gap-2 text-sm text-slate-600">
+            <input
+              id="student-records-print-include-memo"
+              type="checkbox"
+              class="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+            />
+            프린트에 메모 포함
+          </label>
+          <button
+            type="button"
+            id="student-records-print-btn"
+            class="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700"
+          >
+            <i class="fa-solid fa-print"></i>
+            프린트
+          </button>
+          <button
+            type="button"
+            class="student-records-modal-close rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
           >
             닫기
           </button>

@@ -188,6 +188,9 @@
     studyKeyword: "",
     studyDraft: emptyStudyDraft(),
     studyRecordsSkipped: false, // true면 서버에 구글 시트 연동이 아직 설정되지 않은 상태
+    recordsModalStudentId: null, // 숙제/학습 기록 화면에서 학생 이름을 눌러 연 학생별 기록 모달의 대상 학생 id
+    recordsModalHomeworkDraft: emptyHomeworkDraft(),
+    recordsModalStudyDraft: emptyStudyDraft(),
   };
 
   // Firestore 구독 해제 함수. 여러 번 구독되지 않도록 한 곳에서 보관합니다.
@@ -2393,6 +2396,7 @@
     }
 
     syncStudentDetailModal();
+    syncStudentRecordsModal();
     syncCounselingDetailModal();
     syncRefundSheetModal();
   }
@@ -3267,6 +3271,74 @@
     });
   }
 
+  function renderHomeworkFormMarkup({ formId, fieldPrefix, submitId, cancelId, d, isEditing }) {
+    return `
+      <form id="${formId}" novalidate>
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-semibold text-slate-900">${isEditing ? "기록 수정" : "새 기록 추가"}</h3>
+          ${isEditing ? `<button type="button" id="${cancelId}" class="text-xs text-slate-500 hover:text-slate-600">수정 취소</button>` : ""}
+        </div>
+        <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-student">학생<span class="text-red-500">*</span></label>
+            <select id="${fieldPrefix}-student" name="studentId" class="form-input" required>${renderStudentSelectOptions(d.studentId)}</select>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-class-date">수업 날짜<span class="text-red-500">*</span></label>
+            <input id="${fieldPrefix}-class-date" name="classDate" type="date" class="form-input" value="${escapeHtml(d.classDate || todayISO())}" required />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-registered-sessions">등록 회차</label>
+            ${renderSelectField(`${fieldPrefix}-registered-sessions`, "registeredSessions", STUDY_REGISTERED_SESSION_OPTIONS, d.registeredSessions ? Number(d.registeredSessions) : "", false)}
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-class-type">반 구분</label>
+            ${renderSelectField(`${fieldPrefix}-class-type`, "classType", STUDY_CLASS_TYPES, d.classType, false)}
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-submitted">제출 상태</label>
+            ${renderSelectField(`${fieldPrefix}-submitted`, "submitted", HOMEWORK_SUBMITTED_OPTIONS, d.submitted || "미제출", false)}
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-checked">확인 상태</label>
+            ${renderSelectField(`${fieldPrefix}-checked`, "checked", HOMEWORK_CHECKED_OPTIONS, d.checked || "미확인", false)}
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-recheck">재확인</label>
+            ${renderSelectField(`${fieldPrefix}-recheck`, "recheck", HOMEWORK_RECHECK_OPTIONS, d.recheck, false)}
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-next-check-date">다음 확인일</label>
+            <input id="${fieldPrefix}-next-check-date" name="nextCheckDate" type="date" class="form-input" value="${escapeHtml(d.nextCheckDate)}" />
+          </div>
+        </div>
+        <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-content">수업 내용</label>
+            <textarea id="${fieldPrefix}-content" name="content" rows="3" class="form-input">${escapeHtml(d.content)}</textarea>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-homework-text">숙제 작성란</label>
+            <textarea id="${fieldPrefix}-homework-text" name="homeworkText" rows="3" class="form-input">${escapeHtml(d.homeworkText)}</textarea>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-feedback">피드백</label>
+            <textarea id="${fieldPrefix}-feedback" name="feedback" rows="3" class="form-input">${escapeHtml(d.feedback)}</textarea>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-memo">메모</label>
+            <textarea id="${fieldPrefix}-memo" name="memo" rows="3" class="form-input">${escapeHtml(d.memo)}</textarea>
+          </div>
+        </div>
+        <div class="mt-4 flex justify-end">
+          <button type="submit" id="${submitId}" class="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-700">
+            ${isEditing ? "수정 저장" : "기록 추가"}
+          </button>
+        </div>
+      </form>
+    `;
+  }
+
   function renderHomeworkView() {
     const d = state.homeworkDraft;
     const isEditing = !!d.id;
@@ -3308,7 +3380,11 @@
               return `
               <tr>
                 <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-600 md:px-6">${formatDate(r.classDate)}</td>
-                <td class="px-4 py-3 text-sm font-medium text-slate-900 md:px-6">${escapeHtml(r.studentName || "-")}</td>
+                <td class="px-4 py-3 text-sm font-medium md:px-6">${
+                  r.studentName
+                    ? `<button type="button" class="records-row-student-name text-brand-700 hover:underline" data-student-name="${escapeHtml(r.studentName)}">${escapeHtml(r.studentName)}</button>`
+                    : `<span class="text-slate-900">-</span>`
+                }</td>
                 <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-600 md:px-6">${escapeHtml(r.classType || "-")}</td>
                 <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-600 md:px-6">${escapeHtml(
                   r.registeredSessions ? `${String(r.registeredSessions).replace(/회$/, "")}회` : "-"
@@ -3367,69 +3443,14 @@
       </section>
 
       <section class="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-6">
-        <form id="homework-form" novalidate>
-          <div class="flex items-center justify-between">
-            <h3 class="text-sm font-semibold text-slate-900">${isEditing ? "기록 수정" : "새 기록 추가"}</h3>
-            ${isEditing ? `<button type="button" id="homework-cancel-edit" class="text-xs text-slate-500 hover:text-slate-600">수정 취소</button>` : ""}
-          </div>
-          <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-student">학생<span class="text-red-500">*</span></label>
-              <select id="hf-student" name="studentId" class="form-input" required>${renderStudentSelectOptions(d.studentId)}</select>
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-class-date">수업 날짜<span class="text-red-500">*</span></label>
-              <input id="hf-class-date" name="classDate" type="date" class="form-input" value="${escapeHtml(d.classDate || todayISO())}" required />
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-registered-sessions">등록 회차</label>
-              ${renderSelectField("hf-registered-sessions", "registeredSessions", STUDY_REGISTERED_SESSION_OPTIONS, d.registeredSessions ? Number(d.registeredSessions) : "", false)}
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-class-type">반 구분</label>
-              ${renderSelectField("hf-class-type", "classType", STUDY_CLASS_TYPES, d.classType, false)}
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-submitted">제출 상태</label>
-              ${renderSelectField("hf-submitted", "submitted", HOMEWORK_SUBMITTED_OPTIONS, d.submitted || "미제출", false)}
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-checked">확인 상태</label>
-              ${renderSelectField("hf-checked", "checked", HOMEWORK_CHECKED_OPTIONS, d.checked || "미확인", false)}
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-recheck">재확인</label>
-              ${renderSelectField("hf-recheck", "recheck", HOMEWORK_RECHECK_OPTIONS, d.recheck, false)}
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-next-check-date">다음 확인일</label>
-              <input id="hf-next-check-date" name="nextCheckDate" type="date" class="form-input" value="${escapeHtml(d.nextCheckDate)}" />
-            </div>
-          </div>
-          <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-content">수업 내용</label>
-              <textarea id="hf-content" name="content" rows="3" class="form-input">${escapeHtml(d.content)}</textarea>
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-homework-text">숙제 작성란</label>
-              <textarea id="hf-homework-text" name="homeworkText" rows="3" class="form-input">${escapeHtml(d.homeworkText)}</textarea>
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-feedback">피드백</label>
-              <textarea id="hf-feedback" name="feedback" rows="3" class="form-input">${escapeHtml(d.feedback)}</textarea>
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="hf-memo">메모</label>
-              <textarea id="hf-memo" name="memo" rows="3" class="form-input">${escapeHtml(d.memo)}</textarea>
-            </div>
-          </div>
-          <div class="mt-4 flex justify-end">
-            <button type="submit" id="homework-submit" class="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-700">
-              ${isEditing ? "수정 저장" : "기록 추가"}
-            </button>
-          </div>
-        </form>
+        ${renderHomeworkFormMarkup({
+          formId: "homework-form",
+          fieldPrefix: "hf",
+          submitId: "homework-submit",
+          cancelId: "homework-cancel-edit",
+          d,
+          isEditing,
+        })}
       </section>
 
       <section class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -3471,8 +3492,9 @@
     };
   }
 
-  async function handleHomeworkFormSubmit(e) {
+  async function handleHomeworkFormSubmit(e, ctx) {
     e.preventDefault();
+    const { draftKey = "homeworkDraft", submitBtnId = "homework-submit" } = ctx || {};
     const form = e.currentTarget;
     const fields = collectHomeworkFieldsFromForm(form);
 
@@ -3488,10 +3510,10 @@
       return;
     }
     homeworkFormSubmitting = true;
-    const submitBtn = document.getElementById("homework-submit");
+    const submitBtn = document.getElementById(submitBtnId);
     if (submitBtn) submitBtn.disabled = true;
 
-    const editingId = state.homeworkDraft.id;
+    const editingId = state[draftKey].id;
     const student = findStudentById(fields.studentId);
     const { studentId, ...rest } = fields;
     const payload = Object.assign({}, rest, { studentName: student ? student.name : "" });
@@ -3504,7 +3526,7 @@
         await createHomeworkRecord(payload);
         showToast("숙제 기록이 추가되었습니다.");
       }
-      state.homeworkDraft = emptyHomeworkDraft();
+      state[draftKey] = emptyHomeworkDraft();
       await loadHomeworkRecords();
     } catch (err) {
       console.error("[handleHomeworkFormSubmit]", err);
@@ -3563,37 +3585,49 @@
       });
     }
 
-    const studentSelect = document.getElementById("hf-student");
+    bindHomeworkFormBehaviors({
+      fieldPrefix: "hf",
+      formId: "homework-form",
+      submitId: "homework-submit",
+      cancelId: "homework-cancel-edit",
+      draftKey: "homeworkDraft",
+      editClass: "homework-edit",
+      deleteClass: "homework-delete",
+    });
+  }
+
+  function bindHomeworkFormBehaviors({ fieldPrefix, formId, submitId, cancelId, draftKey, editClass, deleteClass }) {
+    const studentSelect = document.getElementById(`${fieldPrefix}-student`);
     if (studentSelect) {
       studentSelect.addEventListener("change", () => {
         const student = findStudentById(studentSelect.value);
-        const registeredSessionsInput = document.getElementById("hf-registered-sessions");
+        const registeredSessionsInput = document.getElementById(`${fieldPrefix}-registered-sessions`);
         if (student && registeredSessionsInput && STUDY_REGISTERED_SESSION_OPTIONS.includes(Number(student.registeredSessions))) {
           registeredSessionsInput.value = String(student.registeredSessions);
         }
       });
     }
 
-    const cancelBtn = document.getElementById("homework-cancel-edit");
+    const cancelBtn = document.getElementById(cancelId);
     if (cancelBtn) {
       cancelBtn.addEventListener("click", () => {
-        state.homeworkDraft = emptyHomeworkDraft();
+        state[draftKey] = emptyHomeworkDraft();
         render();
       });
     }
 
-    document.querySelectorAll(".homework-edit").forEach((btn) => {
+    document.querySelectorAll(`.${editClass}`).forEach((btn) => {
       btn.addEventListener("click", () => {
         const id = btn.getAttribute("data-id");
         const rec = state.homeworkRecords.find((r) => r.id === id);
         if (!rec) return;
-        state.homeworkDraft = homeworkRecordToDraft(rec);
+        state[draftKey] = homeworkRecordToDraft(rec);
         render();
-        document.getElementById("hf-student")?.focus();
+        document.getElementById(`${fieldPrefix}-student`)?.focus();
       });
     });
 
-    document.querySelectorAll(".homework-delete").forEach((btn) => {
+    document.querySelectorAll(`.${deleteClass}`).forEach((btn) => {
       btn.addEventListener("click", () => {
         const id = btn.getAttribute("data-id");
         const rec = state.homeworkRecords.find((r) => r.id === id);
@@ -3603,7 +3637,7 @@
           onConfirm: async () => {
             try {
               await deleteHomeworkRecord(id);
-              if (state.homeworkDraft.id === id) state.homeworkDraft = emptyHomeworkDraft();
+              if (state[draftKey].id === id) state[draftKey] = emptyHomeworkDraft();
               showToast("숙제 기록이 삭제되었습니다.");
               await loadHomeworkRecords();
             } catch (err) {
@@ -3615,7 +3649,7 @@
       });
     });
 
-    const form = document.getElementById("homework-form");
+    const form = document.getElementById(formId);
     if (form) {
       form.addEventListener("keydown", (e) => {
         const target = e.target;
@@ -3624,7 +3658,7 @@
           e.preventDefault();
         }
       });
-      form.addEventListener("submit", handleHomeworkFormSubmit);
+      form.addEventListener("submit", (e) => handleHomeworkFormSubmit(e, { draftKey, submitBtnId: submitId }));
     }
   }
 
@@ -3701,6 +3735,82 @@
     });
   }
 
+  function renderStudyFormMarkup({ formId, fieldPrefix, submitId, cancelId, d, isEditing }) {
+    return `
+      <form id="${formId}" novalidate>
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-semibold text-slate-900">${isEditing ? "기록 수정" : "새 기록 추가"}</h3>
+          ${isEditing ? `<button type="button" id="${cancelId}" class="text-xs text-slate-500 hover:text-slate-600">수정 취소</button>` : ""}
+        </div>
+        <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-student">학생<span class="text-red-500">*</span></label>
+            <select id="${fieldPrefix}-student" name="studentId" class="form-input" required>${renderStudentSelectOptions(d.studentId)}</select>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-class-date">수업 날짜<span class="text-red-500">*</span></label>
+            <input id="${fieldPrefix}-class-date" name="classDate" type="date" class="form-input" value="${escapeHtml(d.classDate || todayISO())}" required />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-registered-sessions">등록 회차</label>
+            ${renderSelectField(`${fieldPrefix}-registered-sessions`, "registeredSessions", STUDY_REGISTERED_SESSION_OPTIONS, d.registeredSessions ? Number(d.registeredSessions) : "", false)}
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-class-type">반 구분</label>
+            ${renderSelectField(`${fieldPrefix}-class-type`, "classType", STUDY_CLASS_TYPES, d.classType, false)}
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-attendance">출결</label>
+            ${renderSelectField(`${fieldPrefix}-attendance`, "attendance", STUDY_ATTENDANCE_OPTIONS, d.attendance, false)}
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-comprehension">이해도</label>
+            ${renderSelectField(`${fieldPrefix}-comprehension`, "comprehension", STUDY_LEVEL_OPTIONS, d.comprehension, false)}
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-participation">참여도</label>
+            ${renderSelectField(`${fieldPrefix}-participation`, "participation", STUDY_LEVEL_OPTIONS, d.participation, false)}
+          </div>
+        </div>
+        <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-topic">학습 주제</label>
+            <textarea id="${fieldPrefix}-topic" name="topic" rows="2" class="form-input">${escapeHtml(d.topic)}</textarea>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-goal">학습 목표</label>
+            <textarea id="${fieldPrefix}-goal" name="goal" rows="2" class="form-input">${escapeHtml(d.goal)}</textarea>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-content">배운 내용</label>
+            <textarea id="${fieldPrefix}-content" name="content" rows="3" class="form-input">${escapeHtml(d.content)}</textarea>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-strengths">잘한 점</label>
+            <textarea id="${fieldPrefix}-strengths" name="strengths" rows="3" class="form-input">${escapeHtml(d.strengths)}</textarea>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-improvement">보완할 점</label>
+            <textarea id="${fieldPrefix}-improvement" name="improvement" rows="3" class="form-input">${escapeHtml(d.improvement)}</textarea>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-next-plan">다음 수업 계획</label>
+            <textarea id="${fieldPrefix}-next-plan" name="nextPlan" rows="3" class="form-input">${escapeHtml(d.nextPlan)}</textarea>
+          </div>
+          <div class="sm:col-span-2">
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-teacher-memo">선생님 메모</label>
+            <textarea id="${fieldPrefix}-teacher-memo" name="teacherMemo" rows="3" class="form-input">${escapeHtml(d.teacherMemo)}</textarea>
+          </div>
+        </div>
+        <div class="mt-4 flex justify-end">
+          <button type="submit" id="${submitId}" class="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-700">
+            ${isEditing ? "수정 저장" : "기록 추가"}
+          </button>
+        </div>
+      </form>
+    `;
+  }
+
   function renderStudyView() {
     const d = state.studyDraft;
     const isEditing = !!d.id;
@@ -3739,7 +3849,11 @@
               return `
               <tr>
                 <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-600 md:px-6">${formatDate(r.classDate)}</td>
-                <td class="px-4 py-3 text-sm font-medium text-slate-900 md:px-6">${escapeHtml(r.studentName || "-")}</td>
+                <td class="px-4 py-3 text-sm font-medium md:px-6">${
+                  r.studentName
+                    ? `<button type="button" class="records-row-student-name text-brand-700 hover:underline" data-student-name="${escapeHtml(r.studentName)}">${escapeHtml(r.studentName)}</button>`
+                    : `<span class="text-slate-900">-</span>`
+                }</td>
                 <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-600 md:px-6">${escapeHtml(r.classType || "-")}</td>
                 <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-600 md:px-6">${escapeHtml(
                   r.registeredSessions ? `${String(r.registeredSessions).replace(/회$/, "")}회` : "-"
@@ -3793,77 +3907,14 @@
       </section>
 
       <section class="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-6">
-        <form id="study-form" novalidate>
-          <div class="flex items-center justify-between">
-            <h3 class="text-sm font-semibold text-slate-900">${isEditing ? "기록 수정" : "새 기록 추가"}</h3>
-            ${isEditing ? `<button type="button" id="study-cancel-edit" class="text-xs text-slate-500 hover:text-slate-600">수정 취소</button>` : ""}
-          </div>
-          <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-student">학생<span class="text-red-500">*</span></label>
-              <select id="sf-student" name="studentId" class="form-input" required>${renderStudentSelectOptions(d.studentId)}</select>
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-class-date">수업 날짜<span class="text-red-500">*</span></label>
-              <input id="sf-class-date" name="classDate" type="date" class="form-input" value="${escapeHtml(d.classDate || todayISO())}" required />
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-registered-sessions">등록 회차</label>
-              ${renderSelectField("sf-registered-sessions", "registeredSessions", STUDY_REGISTERED_SESSION_OPTIONS, d.registeredSessions ? Number(d.registeredSessions) : "", false)}
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-class-type">반 구분</label>
-              ${renderSelectField("sf-class-type", "classType", STUDY_CLASS_TYPES, d.classType, false)}
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-attendance">출결</label>
-              ${renderSelectField("sf-attendance", "attendance", STUDY_ATTENDANCE_OPTIONS, d.attendance, false)}
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-comprehension">이해도</label>
-              ${renderSelectField("sf-comprehension", "comprehension", STUDY_LEVEL_OPTIONS, d.comprehension, false)}
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-participation">참여도</label>
-              ${renderSelectField("sf-participation", "participation", STUDY_LEVEL_OPTIONS, d.participation, false)}
-            </div>
-          </div>
-          <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-topic">학습 주제</label>
-              <textarea id="sf-topic" name="topic" rows="2" class="form-input">${escapeHtml(d.topic)}</textarea>
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-goal">학습 목표</label>
-              <textarea id="sf-goal" name="goal" rows="2" class="form-input">${escapeHtml(d.goal)}</textarea>
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-content">배운 내용</label>
-              <textarea id="sf-content" name="content" rows="3" class="form-input">${escapeHtml(d.content)}</textarea>
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-strengths">잘한 점</label>
-              <textarea id="sf-strengths" name="strengths" rows="3" class="form-input">${escapeHtml(d.strengths)}</textarea>
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-improvement">보완할 점</label>
-              <textarea id="sf-improvement" name="improvement" rows="3" class="form-input">${escapeHtml(d.improvement)}</textarea>
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-next-plan">다음 수업 계획</label>
-              <textarea id="sf-next-plan" name="nextPlan" rows="3" class="form-input">${escapeHtml(d.nextPlan)}</textarea>
-            </div>
-            <div class="sm:col-span-2">
-              <label class="mb-1 block text-xs font-medium text-slate-600" for="sf-teacher-memo">선생님 메모</label>
-              <textarea id="sf-teacher-memo" name="teacherMemo" rows="3" class="form-input">${escapeHtml(d.teacherMemo)}</textarea>
-            </div>
-          </div>
-          <div class="mt-4 flex justify-end">
-            <button type="submit" id="study-submit" class="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-700">
-              ${isEditing ? "수정 저장" : "기록 추가"}
-            </button>
-          </div>
-        </form>
+        ${renderStudyFormMarkup({
+          formId: "study-form",
+          fieldPrefix: "sf",
+          submitId: "study-submit",
+          cancelId: "study-cancel-edit",
+          d,
+          isEditing,
+        })}
       </section>
 
       <section class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -3907,8 +3958,9 @@
     };
   }
 
-  async function handleStudyFormSubmit(e) {
+  async function handleStudyFormSubmit(e, ctx) {
     e.preventDefault();
+    const { draftKey = "studyDraft", submitBtnId = "study-submit" } = ctx || {};
     const form = e.currentTarget;
     const fields = collectStudyFieldsFromForm(form);
 
@@ -3924,10 +3976,10 @@
       return;
     }
     studyFormSubmitting = true;
-    const submitBtn = document.getElementById("study-submit");
+    const submitBtn = document.getElementById(submitBtnId);
     if (submitBtn) submitBtn.disabled = true;
 
-    const editingId = state.studyDraft.id;
+    const editingId = state[draftKey].id;
     const student = findStudentById(fields.studentId);
     const { studentId, ...rest } = fields;
     const payload = Object.assign({}, rest, { studentName: student ? student.name : "" });
@@ -3940,7 +3992,7 @@
         await createStudyRecord(payload);
         showToast("학습 기록이 추가되었습니다.");
       }
-      state.studyDraft = emptyStudyDraft();
+      state[draftKey] = emptyStudyDraft();
       await loadStudyRecords();
     } catch (err) {
       console.error("[handleStudyFormSubmit]", err);
@@ -3999,37 +4051,49 @@
       });
     }
 
-    const studentSelect = document.getElementById("sf-student");
+    bindStudyFormBehaviors({
+      fieldPrefix: "sf",
+      formId: "study-form",
+      submitId: "study-submit",
+      cancelId: "study-cancel-edit",
+      draftKey: "studyDraft",
+      editClass: "study-edit",
+      deleteClass: "study-delete",
+    });
+  }
+
+  function bindStudyFormBehaviors({ fieldPrefix, formId, submitId, cancelId, draftKey, editClass, deleteClass }) {
+    const studentSelect = document.getElementById(`${fieldPrefix}-student`);
     if (studentSelect) {
       studentSelect.addEventListener("change", () => {
         const student = findStudentById(studentSelect.value);
-        const registeredSessionsInput = document.getElementById("sf-registered-sessions");
+        const registeredSessionsInput = document.getElementById(`${fieldPrefix}-registered-sessions`);
         if (student && registeredSessionsInput && STUDY_REGISTERED_SESSION_OPTIONS.includes(Number(student.registeredSessions))) {
           registeredSessionsInput.value = String(student.registeredSessions);
         }
       });
     }
 
-    const cancelBtn = document.getElementById("study-cancel-edit");
+    const cancelBtn = document.getElementById(cancelId);
     if (cancelBtn) {
       cancelBtn.addEventListener("click", () => {
-        state.studyDraft = emptyStudyDraft();
+        state[draftKey] = emptyStudyDraft();
         render();
       });
     }
 
-    document.querySelectorAll(".study-edit").forEach((btn) => {
+    document.querySelectorAll(`.${editClass}`).forEach((btn) => {
       btn.addEventListener("click", () => {
         const id = btn.getAttribute("data-id");
         const rec = state.studyRecords.find((r) => r.id === id);
         if (!rec) return;
-        state.studyDraft = studyRecordToDraft(rec);
+        state[draftKey] = studyRecordToDraft(rec);
         render();
-        document.getElementById("sf-student")?.focus();
+        document.getElementById(`${fieldPrefix}-student`)?.focus();
       });
     });
 
-    document.querySelectorAll(".study-delete").forEach((btn) => {
+    document.querySelectorAll(`.${deleteClass}`).forEach((btn) => {
       btn.addEventListener("click", () => {
         const id = btn.getAttribute("data-id");
         const rec = state.studyRecords.find((r) => r.id === id);
@@ -4039,7 +4103,7 @@
           onConfirm: async () => {
             try {
               await deleteStudyRecord(id);
-              if (state.studyDraft.id === id) state.studyDraft = emptyStudyDraft();
+              if (state[draftKey].id === id) state[draftKey] = emptyStudyDraft();
               showToast("학습 기록이 삭제되었습니다.");
               await loadStudyRecords();
             } catch (err) {
@@ -4051,7 +4115,7 @@
       });
     });
 
-    const form = document.getElementById("study-form");
+    const form = document.getElementById(formId);
     if (form) {
       form.addEventListener("keydown", (e) => {
         const target = e.target;
@@ -4060,7 +4124,7 @@
           e.preventDefault();
         }
       });
-      form.addEventListener("submit", handleStudyFormSubmit);
+      form.addEventListener("submit", (e) => handleStudyFormSubmit(e, { draftKey, submitBtnId: submitId }));
     }
   }
 
@@ -4092,6 +4156,16 @@
       btn.addEventListener("click", () => {
         state.recordsTab = btn.dataset.recordsTab === "study" ? "study" : "homework";
         render();
+      });
+    });
+    document.querySelectorAll(".records-row-student-name").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const student = findStudentByName(btn.dataset.studentName);
+        if (!student) {
+          showToast("학생 정보를 찾을 수 없습니다.");
+          return;
+        }
+        openStudentRecordsModal(student.id);
       });
     });
     if (state.recordsTab === "study") bindStudyViewEvents();
@@ -4629,6 +4703,7 @@
             <th class="hidden whitespace-nowrap px-4 py-3 md:table-cell md:px-6">진도</th>
             <th class="whitespace-nowrap px-4 py-3 md:px-6">수강 여부</th>
             <th class="whitespace-nowrap px-2 py-3 text-center md:px-3">회차 관리</th>
+            <th class="whitespace-nowrap px-2 py-3 text-center md:px-3">기록</th>
             <th class="whitespace-nowrap px-2 py-3 text-center md:px-3">수정</th>
             <th class="whitespace-nowrap px-2 py-3 text-center md:px-3">
               <span class="sr-only">삭제</span>
@@ -4699,6 +4774,17 @@
             aria-label="회차 관리"
           >
             <i class="fa-solid fa-list-check"></i>
+          </button>
+        </td>
+        <td class="whitespace-nowrap px-2 py-3.5 text-center md:px-3">
+          <button
+            type="button"
+            class="action-records inline-flex h-11 w-11 items-center justify-center rounded-md text-slate-500 transition hover:bg-brand-50 hover:text-brand-600"
+            data-id="${escapeHtml(s.id)}"
+            title="숙제/학습 기록 보기"
+            aria-label="${escapeHtml(s.name || "학생")} 숙제/학습 기록 보기"
+          >
+            <i class="fa-solid fa-book-open"></i>
           </button>
         </td>
         <td class="whitespace-nowrap px-2 py-3.5 text-center md:px-3">
@@ -5085,6 +5171,10 @@
     if (refundBtn) {
       refundBtn.dataset.studentId = student.id || "";
     }
+    const recordsBtn = document.getElementById("student-detail-records-btn");
+    if (recordsBtn) {
+      recordsBtn.dataset.studentId = student.id || "";
+    }
     bodyEl.scrollTop = 0;
   }
 
@@ -5129,7 +5219,7 @@
 
     return `
       <tr class="student-row-detail bg-slate-50/60" data-id="${escapeHtml(s.id)}">
-        <td colspan="10" class="px-4 py-4 md:px-6">
+        <td colspan="11" class="px-4 py-4 md:px-6">
           <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)]">
             <section class="student-inline-detail-panel rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <div class="student-inline-detail-header mb-4 flex items-start justify-between gap-3">
@@ -5384,6 +5474,8 @@
                               : "is-active border-brand-500 bg-brand-50 text-brand-700"
                             : isNotifySelected
                               ? "border-brand-300 bg-brand-50/60 text-brand-700"
+                              : slot.isCancelled
+                                ? "border-rose-200 bg-rose-50 text-rose-600 line-through decoration-rose-300"
                               : slot.isCompleted
                                 ? "is-complete"
                                 : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50";
@@ -6270,6 +6362,24 @@
                     }${event.location ? ` · ${escapeHtml(event.location)}` : ""}
                       </p>
                     </div>
+                    <div class="flex shrink-0 items-center gap-1.5">
+                    ${
+                      event.kind === "class" || event.kind === "cancelled"
+                        ? `<button
+                            type="button"
+                            class="calendar-toggle-cancel shrink-0 rounded-md border px-2.5 py-1.5 text-xs font-medium ${
+                              event.kind === "cancelled"
+                                ? "border-slate-200 text-slate-600 hover:bg-slate-50"
+                                : "border-rose-200 text-rose-600 hover:bg-rose-50"
+                            }"
+                            data-student-id="${escapeHtml(event.studentId)}"
+                            data-session-number="${event.sessionNumber}"
+                            data-cancelled="${event.kind === "cancelled" ? "1" : "0"}"
+                          >
+                            ${event.kind === "cancelled" ? "휴강 해제" : "휴강/취소"}
+                          </button>`
+                        : ""
+                    }
                     <button
                       type="button"
                       class="calendar-open-student-detail shrink-0 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
@@ -6277,6 +6387,7 @@
                     >
                       학생 상세
                     </button>
+                    </div>
                   </li>
                 `
                   )
@@ -6613,6 +6724,14 @@
         render();
       });
     });
+    document.querySelectorAll(".calendar-toggle-cancel").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        saveStudentSessionRecord(btn.dataset.studentId, Number(btn.dataset.sessionNumber), {
+          isCancelled: btn.dataset.cancelled !== "1",
+        });
+      });
+    });
+
     document.querySelectorAll(".calendar-open-student-detail").forEach((btn) => {
       btn.addEventListener("click", () => {
         openStudentDetailModal(btn.dataset.studentId);
@@ -6968,6 +7087,13 @@
             }
           },
         });
+      });
+    });
+
+    document.querySelectorAll(".action-records").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openStudentRecordsModal(btn.dataset.id);
       });
     });
 
@@ -7369,6 +7495,321 @@
     }
 
     fillStudentDetailModal(student);
+  }
+
+  function renderRecordsModalHomeworkItem(r) {
+    const submitted = r.submitted === "완료";
+    const checked = r.checked === "확인 완료";
+    return `
+      <li class="student-detail-record-item">
+        <div class="student-detail-record-item-head">
+          <span>${escapeHtml(formatDate(r.classDate))}</span>
+          ${r.classType ? `<span>${escapeHtml(r.classType)}</span>` : ""}
+          <span class="student-detail-chip ${submitted ? "is-active" : "is-inactive"}">${escapeHtml(r.submitted || "미제출")}</span>
+          <span class="student-detail-chip ${checked ? "is-active" : "is-inactive"}">${escapeHtml(r.checked || "미확인")}</span>
+          <span class="ml-auto flex items-center gap-1">
+            <button type="button" class="mhf-edit inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-brand-600" data-id="${escapeHtml(r.id)}" title="수정" aria-label="수정"><i class="fa-solid fa-pen-to-square"></i></button>
+            <button type="button" class="mhf-delete inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 transition hover:bg-red-50 hover:text-red-600" data-id="${escapeHtml(r.id)}" title="삭제" aria-label="삭제"><i class="fa-solid fa-trash"></i></button>
+          </span>
+        </div>
+        ${r.homeworkText ? `<p class="student-detail-record-item-body">숙제: ${escapeHtml(r.homeworkText)}</p>` : ""}
+        ${r.feedback ? `<p class="student-detail-record-item-body">피드백: ${escapeHtml(r.feedback)}</p>` : ""}
+      </li>
+    `;
+  }
+
+  function renderRecordsModalStudyItem(r) {
+    return `
+      <li class="student-detail-record-item">
+        <div class="student-detail-record-item-head">
+          <span>${escapeHtml(formatDate(r.classDate))}</span>
+          ${r.classType ? `<span>${escapeHtml(r.classType)}</span>` : ""}
+          ${r.attendance ? `<span>${escapeHtml(r.attendance)}</span>` : ""}
+          <span class="ml-auto flex items-center gap-1">
+            <button type="button" class="msf-edit inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-brand-600" data-id="${escapeHtml(r.id)}" title="수정" aria-label="수정"><i class="fa-solid fa-pen-to-square"></i></button>
+            <button type="button" class="msf-delete inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 transition hover:bg-red-50 hover:text-red-600" data-id="${escapeHtml(r.id)}" title="삭제" aria-label="삭제"><i class="fa-solid fa-trash"></i></button>
+          </span>
+        </div>
+        ${r.topic ? `<p class="student-detail-record-item-body">주제: ${escapeHtml(r.topic)}</p>` : ""}
+        ${r.content ? `<p class="student-detail-record-item-body">내용: ${escapeHtml(r.content)}</p>` : ""}
+      </li>
+    `;
+  }
+
+  function renderRecordsModalHomeworkSection(student) {
+    const records = getStudentHomeworkRecords(student);
+    const d = state.recordsModalHomeworkDraft;
+    const isEditing = !!d.id;
+    const listHtml =
+      state.homeworkRecordsLoading && !state.homeworkRecordsLoadedOnce
+        ? `<p class="student-detail-empty-note">불러오는 중…</p>`
+        : records.length === 0
+          ? `<p class="student-detail-empty-note">등록된 숙제 기록이 없습니다.</p>`
+          : `<ul class="student-detail-record-list">${records.map(renderRecordsModalHomeworkItem).join("")}</ul>`;
+
+    return `
+      <section class="student-detail-section">
+        <h3 class="student-detail-section-title">숙제 기록</h3>
+        ${listHtml}
+        <div class="mt-4 border-t border-slate-200 pt-4">
+          ${renderHomeworkFormMarkup({
+            formId: "mhf-form",
+            fieldPrefix: "mhf",
+            submitId: "mhf-submit",
+            cancelId: "mhf-cancel-edit",
+            d,
+            isEditing,
+          })}
+        </div>
+      </section>
+    `;
+  }
+
+  function renderRecordsModalStudySection(student) {
+    const records = getStudentStudyRecords(student);
+    const d = state.recordsModalStudyDraft;
+    const isEditing = !!d.id;
+    const listHtml =
+      state.studyRecordsLoading && !state.studyRecordsLoadedOnce
+        ? `<p class="student-detail-empty-note">불러오는 중…</p>`
+        : records.length === 0
+          ? `<p class="student-detail-empty-note">등록된 학습 기록이 없습니다.</p>`
+          : `<ul class="student-detail-record-list">${records.map(renderRecordsModalStudyItem).join("")}</ul>`;
+
+    return `
+      <section class="student-detail-section">
+        <h3 class="student-detail-section-title">학습 기록</h3>
+        ${listHtml}
+        <div class="mt-4 border-t border-slate-200 pt-4">
+          ${renderStudyFormMarkup({
+            formId: "msf-form",
+            fieldPrefix: "msf",
+            submitId: "msf-submit",
+            cancelId: "msf-cancel-edit",
+            d,
+            isEditing,
+          })}
+        </div>
+      </section>
+    `;
+  }
+
+  function renderStudentRecordsModalContent(student) {
+    return `
+      <div class="student-detail-summary">
+        <div class="min-w-0">
+          <p class="student-detail-name">${escapeHtml(student.name || "학생명 미입력")}</p>
+          <p class="student-detail-meta">${escapeHtml(
+            [student.assignedInstructor || "담당 강사 미입력", student.contact || "연락처 미입력"].join(" · ")
+          )}</p>
+        </div>
+      </div>
+      <div class="student-detail-sections">
+        ${renderRecordsModalHomeworkSection(student)}
+        ${renderRecordsModalStudySection(student)}
+      </div>
+    `;
+  }
+
+  function fillStudentRecordsModal(student) {
+    const titleEl = document.getElementById("student-records-modal-title");
+    const bodyEl = document.getElementById("student-records-modal-body");
+    if (!titleEl || !bodyEl) return;
+
+    titleEl.textContent = `${student.name || "학생"} 숙제/학습 기록`;
+    bodyEl.innerHTML = renderStudentRecordsModalContent(student);
+    bodyEl.scrollTop = 0;
+
+    bindHomeworkFormBehaviors({
+      fieldPrefix: "mhf",
+      formId: "mhf-form",
+      submitId: "mhf-submit",
+      cancelId: "mhf-cancel-edit",
+      draftKey: "recordsModalHomeworkDraft",
+      editClass: "mhf-edit",
+      deleteClass: "mhf-delete",
+    });
+    bindStudyFormBehaviors({
+      fieldPrefix: "msf",
+      formId: "msf-form",
+      submitId: "msf-submit",
+      cancelId: "msf-cancel-edit",
+      draftKey: "recordsModalStudyDraft",
+      editClass: "msf-edit",
+      deleteClass: "msf-delete",
+    });
+  }
+
+  function openStudentRecordsModal(studentId) {
+    const modal = document.getElementById("student-records-modal");
+    if (!modal) return;
+
+    const student = state.students.find((it) => it.id === studentId);
+    if (!student) {
+      showToast("학생 정보를 찾을 수 없습니다.");
+      return;
+    }
+
+    state.recordsModalStudentId = studentId;
+    state.recordsModalHomeworkDraft = Object.assign(emptyHomeworkDraft(), { studentId });
+    state.recordsModalStudyDraft = Object.assign(emptyStudyDraft(), { studentId });
+    if (!state.homeworkRecordsLoadedOnce && !state.homeworkRecordsLoading) loadHomeworkRecords();
+    if (!state.studyRecordsLoadedOnce && !state.studyRecordsLoading) loadStudyRecords();
+    fillStudentRecordsModal(student);
+    modal.removeAttribute("hidden");
+    modal.style.removeProperty("display");
+    modal.classList.remove("hidden");
+    modal.classList.add("modal-open");
+    document.body.style.overflow = "hidden";
+    trapModalFocus(modal);
+  }
+
+  function closeStudentRecordsModal() {
+    const modal = document.getElementById("student-records-modal");
+    if (!modal) return;
+    modal.classList.remove("modal-open");
+    modal.classList.add("hidden");
+    modal.setAttribute("hidden", "");
+    modal.style.setProperty("display", "none", "important");
+    document.body.style.overflow = "";
+    state.recordsModalStudentId = null;
+    state.recordsModalHomeworkDraft = emptyHomeworkDraft();
+    state.recordsModalStudyDraft = emptyStudyDraft();
+    releaseModalFocus(modal);
+  }
+
+  function syncStudentRecordsModal() {
+    const modal = document.getElementById("student-records-modal");
+    if (!modal || !modal.classList.contains("modal-open") || !state.recordsModalStudentId) return;
+
+    const student = state.students.find((it) => it.id === state.recordsModalStudentId);
+    if (!student) {
+      closeStudentRecordsModal();
+      return;
+    }
+
+    fillStudentRecordsModal(student);
+  }
+
+  // 학생 한 명의 숙제/학습 기록을 프린트용 독립 HTML 문서로 만듭니다(오래된 기록 → 최신 순).
+  // includeMemo 가 false 면 학부모 전달용으로 내부 메모(숙제 메모·선생님 메모)를 뺍니다.
+  function buildStudentRecordsPrintHtml(student, { includeMemo = false } = {}) {
+    const byDateAsc = (list) => sortRecordsByDateDesc(list).reverse();
+    const homework = byDateAsc(state.homeworkRecords.filter((r) => r.studentName === student.name));
+    const study = byDateAsc(state.studyRecords.filter((r) => r.studentName === student.name));
+
+    const row = (label, value) =>
+      value ? `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(String(value))}</td></tr>` : "";
+    const sessionsText = (v) => (v ? `${String(v).replace(/회$/, "")}회` : "");
+
+    const homeworkHtml = homework.length
+      ? homework
+          .map(
+            (r) => `
+        <article class="rec">
+          <h3>${escapeHtml(formatDate(r.classDate))}${r.classType ? ` · ${escapeHtml(r.classType)}` : ""}</h3>
+          <table>
+            ${row("등록 회차", sessionsText(r.registeredSessions))}
+            ${row("제출 상태", r.submitted || "미제출")}
+            ${row("확인 상태", r.checked || "미확인")}
+            ${row("재확인", r.recheck)}
+            ${row("다음 확인일", r.nextCheckDate ? formatDate(r.nextCheckDate) : "")}
+            ${row("수업 내용", r.content)}
+            ${row("숙제", r.homeworkText)}
+            ${row("피드백", r.feedback)}
+            ${includeMemo ? row("메모", r.memo) : ""}
+          </table>
+        </article>`
+          )
+          .join("")
+      : `<p class="empty">등록된 숙제 기록이 없습니다.</p>`;
+
+    const studyHtml = study.length
+      ? study
+          .map(
+            (r) => `
+        <article class="rec">
+          <h3>${escapeHtml(formatDate(r.classDate))}${r.classType ? ` · ${escapeHtml(r.classType)}` : ""}</h3>
+          <table>
+            ${row("등록 회차", sessionsText(r.registeredSessions))}
+            ${row("출결", r.attendance)}
+            ${row("이해도", r.comprehension)}
+            ${row("참여도", r.participation)}
+            ${row("학습 주제", r.topic)}
+            ${row("학습 목표", r.goal)}
+            ${row("배운 내용", r.content)}
+            ${row("잘한 점", r.strengths)}
+            ${row("보완할 점", r.improvement)}
+            ${row("다음 수업 계획", r.nextPlan)}
+            ${includeMemo ? row("선생님 메모", r.teacherMemo) : ""}
+          </table>
+        </article>`
+          )
+          .join("")
+      : `<p class="empty">등록된 학습 기록이 없습니다.</p>`;
+
+    const name = student.name || "학생";
+    const meta = [student.assignedInstructor ? `담당 ${student.assignedInstructor}` : "", student.curriculum || ""]
+      .filter(Boolean)
+      .join(" · ");
+
+    return `<!doctype html>
+<html lang="ko"><head><meta charset="utf-8" />
+<title>${escapeHtml(name)} 숙제·학습 기록</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; color: #0f172a; margin: 24px; font-size: 12px; line-height: 1.55; }
+  header { border-bottom: 2px solid #0f172a; padding-bottom: 8px; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0; }
+  .meta { color: #475569; margin-top: 4px; }
+  h2 { font-size: 15px; margin: 20px 0 8px; padding-bottom: 4px; border-bottom: 1px solid #cbd5e1; }
+  .rec { border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; break-inside: avoid; page-break-inside: avoid; }
+  .rec h3 { font-size: 13px; margin: 0 0 4px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { width: 88px; text-align: left; vertical-align: top; color: #475569; font-weight: 600; padding: 2px 8px 2px 0; }
+  td { white-space: pre-wrap; word-break: break-word; padding: 2px 0; }
+  .empty { color: #64748b; }
+  @page { size: A4; margin: 14mm; }
+  @media print { body { margin: 0; } }
+</style></head>
+<body>
+  <header>
+    <h1>${escapeHtml(name)} 숙제·학습 기록</h1>
+    <div class="meta">${escapeHtml([meta, `출력일 ${formatDate(todayISO())}`].filter(Boolean).join(" · "))}</div>
+  </header>
+  <h2>숙제 기록 (${homework.length}건)</h2>
+  ${homeworkHtml}
+  <h2>학습 기록 (${study.length}건)</h2>
+  ${studyHtml}
+</body></html>`;
+  }
+
+  function printStudentRecords() {
+    const student = state.students.find((it) => it.id === state.recordsModalStudentId);
+    if (!student) {
+      showToast("학생 정보를 찾을 수 없습니다.");
+      return;
+    }
+    if (
+      (state.homeworkRecordsLoading && !state.homeworkRecordsLoadedOnce) ||
+      (state.studyRecordsLoading && !state.studyRecordsLoadedOnce)
+    ) {
+      showToast("기록을 불러오는 중입니다. 잠시 후 다시 눌러 주세요.");
+      return;
+    }
+    const includeMemo = !!document.getElementById("student-records-print-include-memo")?.checked;
+    const html = buildStudentRecordsPrintHtml(student, { includeMemo });
+    const win = window.open("", "_blank");
+    if (!win) {
+      showToast("팝업이 차단되었습니다. 브라우저에서 팝업을 허용한 뒤 다시 시도해 주세요.");
+      return;
+    }
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    // 문서가 그려진 다음 인쇄 창을 띄웁니다.
+    setTimeout(() => win.print(), 250);
   }
 
   function openCounselingDetailModal(id) {
@@ -8616,6 +9057,17 @@
 
     document.querySelectorAll("#student-detail-modal .student-detail-close").forEach((btn) => {
       btn.addEventListener("click", closeStudentDetailModal);
+    });
+
+    document.querySelectorAll("#student-records-modal .student-records-modal-close").forEach((btn) => {
+      btn.addEventListener("click", closeStudentRecordsModal);
+    });
+    document.getElementById("student-records-print-btn")?.addEventListener("click", printStudentRecords);
+    document.getElementById("student-detail-records-btn")?.addEventListener("click", () => {
+      const studentId = document.getElementById("student-detail-records-btn")?.dataset.studentId;
+      if (!studentId) return;
+      closeStudentDetailModal();
+      openStudentRecordsModal(studentId);
     });
     document
       .getElementById("student-detail-refund-btn")
