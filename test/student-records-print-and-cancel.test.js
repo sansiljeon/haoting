@@ -347,3 +347,82 @@ describe('휴강/취소', () => {
     expect(updates.at(-1).patch.sessionRecords[0].isCancelled).toBe(false);
   });
 });
+
+describe('리뷰 지적 수정 — 회귀 테스트', () => {
+  it('기록 불러오기에 실패하면 프린트를 막고 안내한다("기록 없음" 문서가 나가지 않게)', async () => {
+    const ctx = await bootApp();
+    ctx.w.fetch = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) }));
+    ctx.w.open = vi.fn();
+    ctx.d.querySelector('.action-records[data-id="stu1"]').click();
+    await sleep(40);
+    ctx.d.getElementById('student-records-print-btn').click();
+    await sleep(10);
+    expect(ctx.w.open).not.toHaveBeenCalled();
+    expect(ctx.d.getElementById('toast').textContent).toContain('불러오지 못해');
+  });
+
+  it('기록 창에서 숙제를 저장한 뒤에도 학생 칸이 그 학생으로 유지된다', async () => {
+    const { w, d } = await bootApp();
+    d.querySelector('.action-records[data-id="stu1"]').click();
+    await sleep(40);
+    const form = d.getElementById('mhf-form');
+    expect(d.getElementById('mhf-student').value).toBe('stu1');
+    form.dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
+    await sleep(40);
+    const posted = w.fetch.mock.calls.find(([, opt]) => opt && opt.method === 'POST');
+    expect(posted).toBeTruthy();
+    expect(JSON.parse(posted[1].body).studentName).toBe('홍길동');
+    expect(d.getElementById('mhf-student').value).toBe('stu1');
+  });
+
+  it('기록 창에서 수정 취소를 눌러도 학생 칸이 비지 않는다', async () => {
+    const { d } = await bootApp();
+    d.querySelector('.action-records[data-id="stu1"]').click();
+    await sleep(40);
+    d.querySelector('.msf-edit').click();
+    await sleep(10);
+    d.getElementById('msf-cancel-edit').click();
+    await sleep(10);
+    expect(d.getElementById('msf-student').value).toBe('stu1');
+  });
+
+  it('ESC 로 학생별 기록 창이 닫힌다', async () => {
+    const { w, d } = await bootApp();
+    d.querySelector('.action-records[data-id="stu1"]').click();
+    await sleep(30);
+    d.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await sleep(10);
+    expect(d.getElementById('student-records-modal').classList.contains('modal-open')).toBe(false);
+  });
+
+  describe('동명이인', () => {
+    const twins = [
+      { id: 'a', name: '홍길동', isActive: true, registeredSessions: 4, assignedInstructor: '왕' },
+      { id: 'b', name: '홍길동', isActive: true, registeredSessions: 4, assignedInstructor: '李' },
+    ];
+
+    it('기록 화면에서 이름을 누르면 엉뚱한 학생을 열지 않고 안내한다', async () => {
+      const { d } = await bootApp({ students: twins });
+      d.querySelector('button.nav-item[data-route="records"]').click();
+      await sleep(40);
+      d.querySelector('.records-row-student-name[data-student-name="홍길동"]').click();
+      await sleep(10);
+      expect(d.getElementById('student-records-modal').classList.contains('modal-open')).toBe(false);
+      expect(d.getElementById('toast').textContent).toContain('2명');
+    });
+
+    it('기록 창에 동명이인 경고를 보여준다', async () => {
+      const { d } = await bootApp({ students: twins });
+      d.querySelector('.action-records[data-id="b"]').click();
+      await sleep(30);
+      expect(d.querySelector('.student-records-duplicate-warning')).not.toBeNull();
+    });
+
+    it('이름이 하나뿐이면 경고가 없다', async () => {
+      const { d } = await bootApp();
+      d.querySelector('.action-records[data-id="stu1"]').click();
+      await sleep(30);
+      expect(d.querySelector('.student-records-duplicate-warning')).toBeNull();
+    });
+  });
+});

@@ -3526,7 +3526,7 @@
         await createHomeworkRecord(payload);
         showToast("숙제 기록이 추가되었습니다.");
       }
-      state[draftKey] = emptyHomeworkDraft();
+      state[draftKey] = freshRecordDraft(draftKey, emptyHomeworkDraft);
       await loadHomeworkRecords();
     } catch (err) {
       console.error("[handleHomeworkFormSubmit]", err);
@@ -3598,6 +3598,15 @@
 
   // 폼에 입력 중인 값을 바로 state 의 draft 에 반영합니다. 한 화면에 숙제·학습 폼이 함께 있거나
   // (기록 화면, 학생별 기록 모달) 비동기 로딩으로 render() 가 다시 돌아도 쓰던 내용이 사라지지 않게 합니다.
+  // 저장·수정 취소·삭제 후 폼을 비울 때 쓰는 새 draft. 학생별 기록 창의 폼이면
+  // 그 창의 학생을 다시 채워 둬서, 이어서 기록할 때 학생 칸이 비지 않게 합니다.
+  function freshRecordDraft(draftKey, factory) {
+    const draft = factory();
+    const isModalDraft = draftKey === "recordsModalHomeworkDraft" || draftKey === "recordsModalStudyDraft";
+    if (isModalDraft && state.recordsModalStudentId) draft.studentId = state.recordsModalStudentId;
+    return draft;
+  }
+
   function bindFormDraftSync(form, draftKey) {
     if (!form) return;
     const sync = (e) => {
@@ -3625,7 +3634,7 @@
     const cancelBtn = document.getElementById(cancelId);
     if (cancelBtn) {
       cancelBtn.addEventListener("click", () => {
-        state[draftKey] = emptyHomeworkDraft();
+        state[draftKey] = freshRecordDraft(draftKey, emptyHomeworkDraft);
         render();
       });
     }
@@ -3651,7 +3660,7 @@
           onConfirm: async () => {
             try {
               await deleteHomeworkRecord(id);
-              if (state[draftKey].id === id) state[draftKey] = emptyHomeworkDraft();
+              if (state[draftKey].id === id) state[draftKey] = freshRecordDraft(draftKey, emptyHomeworkDraft);
               showToast("숙제 기록이 삭제되었습니다.");
               await loadHomeworkRecords();
             } catch (err) {
@@ -4007,7 +4016,7 @@
         await createStudyRecord(payload);
         showToast("학습 기록이 추가되었습니다.");
       }
-      state[draftKey] = emptyStudyDraft();
+      state[draftKey] = freshRecordDraft(draftKey, emptyStudyDraft);
       await loadStudyRecords();
     } catch (err) {
       console.error("[handleStudyFormSubmit]", err);
@@ -4092,7 +4101,7 @@
     const cancelBtn = document.getElementById(cancelId);
     if (cancelBtn) {
       cancelBtn.addEventListener("click", () => {
-        state[draftKey] = emptyStudyDraft();
+        state[draftKey] = freshRecordDraft(draftKey, emptyStudyDraft);
         render();
       });
     }
@@ -4118,7 +4127,7 @@
           onConfirm: async () => {
             try {
               await deleteStudyRecord(id);
-              if (state[draftKey].id === id) state[draftKey] = emptyStudyDraft();
+              if (state[draftKey].id === id) state[draftKey] = freshRecordDraft(draftKey, emptyStudyDraft);
               showToast("학습 기록이 삭제되었습니다.");
               await loadStudyRecords();
             } catch (err) {
@@ -4332,12 +4341,18 @@
     });
     document.querySelectorAll(".records-row-student-name").forEach((btn) => {
       btn.addEventListener("click", () => {
-        const student = findStudentByName(btn.dataset.studentName);
-        if (!student) {
+        const name = btn.dataset.studentName;
+        const matches = state.students.filter((s) => s.name === name);
+        if (matches.length === 0) {
           showToast("학생 정보를 찾을 수 없습니다.");
           return;
         }
-        openStudentRecordsModal(student.id);
+        if (matches.length > 1) {
+          // 기록(구글 시트)에는 학생 이름만 저장돼 있어 동명이인을 구분할 수 없습니다.
+          showToast(`'${name}' 학생이 ${matches.length}명이라 구분할 수 없습니다. 학생관리에서 해당 학생의 기록 버튼으로 열어 주세요.`);
+          return;
+        }
+        openStudentRecordsModal(matches[0].id);
       });
     });
     const dailyFilter = document.getElementById("daily-student-filter");
@@ -7783,6 +7798,14 @@
           )}</p>
         </div>
       </div>
+      ${
+        state.students.filter((s) => s.name === student.name).length > 1
+          ? `<p class="student-records-duplicate-warning mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <i class="fa-solid fa-triangle-exclamation mr-1"></i>
+              이름이 같은 학생이 있습니다. 기록은 이름으로만 저장되어 있어, 같은 이름 학생의 기록이 함께 보일 수 있습니다.
+            </p>`
+          : ""
+      }
       <div class="student-detail-sections">
         <section class="student-detail-section">
           <h3 class="student-detail-section-title">날짜별 진도 (학습 + 숙제)</h3>
@@ -7980,11 +8003,19 @@
       showToast("학생 정보를 찾을 수 없습니다.");
       return;
     }
-    if (
-      (state.homeworkRecordsLoading && !state.homeworkRecordsLoadedOnce) ||
-      (state.studyRecordsLoading && !state.studyRecordsLoadedOnce)
-    ) {
+    if (state.homeworkRecordsLoading || state.studyRecordsLoading) {
       showToast("기록을 불러오는 중입니다. 잠시 후 다시 눌러 주세요.");
+      return;
+    }
+    // 불러오기에 실패했거나 아직 한 번도 못 불러왔으면, "기록 없음" 문서가 학부모에게
+    // 잘못 전달되지 않도록 프린트를 막습니다.
+    if (
+      state.homeworkRecordsError ||
+      state.studyRecordsError ||
+      !state.homeworkRecordsLoadedOnce ||
+      !state.studyRecordsLoadedOnce
+    ) {
+      showToast("기록을 불러오지 못해 프린트할 수 없습니다. 기록 화면에서 새로고침한 뒤 다시 시도해 주세요.");
       return;
     }
     const includeMemo = !!document.getElementById("student-records-print-include-memo")?.checked;
@@ -9389,6 +9420,10 @@
       }
       if (document.getElementById("counseling-detail-modal")?.classList.contains("modal-open")) {
         closeCounselingDetailModal();
+        return;
+      }
+      if (document.getElementById("student-records-modal")?.classList.contains("modal-open")) {
+        closeStudentRecordsModal();
         return;
       }
       if (document.getElementById("student-detail-modal")?.classList.contains("modal-open")) {
