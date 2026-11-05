@@ -121,6 +121,116 @@ describe('학생 관리 → 숙제/학습 기록 바로 보기', () => {
   });
 });
 
+describe('학습/숙제 기록 화면 — 탭 없이 한 페이지', () => {
+  async function openRecordsPage() {
+    const ctx = await bootApp();
+    ctx.d.querySelector('button.nav-item[data-route="records"]').click();
+    await sleep(40);
+    return ctx;
+  }
+
+  it('숙제 기록과 학습 기록이 탭 없이 한 화면에 함께 보인다', async () => {
+    const { d } = await openRecordsPage();
+    expect(d.querySelector('.records-tab-btn')).toBeNull();
+    expect(d.getElementById('homework-form')).not.toBeNull();
+    expect(d.getElementById('study-form')).not.toBeNull();
+    // 숙제 3건(h1~h3), 학습 1건(s1)이 각 표에 함께 그려진다.
+    expect(d.querySelectorAll('.homework-edit').length).toBe(3);
+    expect(d.querySelectorAll('.study-edit').length).toBe(1);
+  });
+
+  it('바로가기 버튼이 학습 기록 섹션으로 스크롤한다', async () => {
+    const { w, d } = await openRecordsPage();
+    const scrolled = vi.fn();
+    w.HTMLElement.prototype.scrollIntoView = scrolled;
+    d.querySelector('.records-jump-btn[data-records-jump="records-study-section"]').click();
+    expect(scrolled).toHaveBeenCalled();
+  });
+
+  it('숙제 폼에 쓰던 내용이 학습 쪽 필터 변경(다시 그리기) 후에도 남아 있다', async () => {
+    const { w, d } = await openRecordsPage();
+    const ta = d.getElementById('hf-feedback');
+    ta.value = '쓰던 피드백';
+    ta.dispatchEvent(new w.Event('input', { bubbles: true }));
+    const studyFilter = d.getElementById('study-class-type-filter') || d.getElementById('study-student-filter');
+    studyFilter.value = studyFilter.options[studyFilter.options.length - 1].value;
+    studyFilter.dispatchEvent(new w.Event('change', { bubbles: true }));
+    await sleep(10);
+    expect(d.getElementById('hf-feedback').value).toBe('쓰던 피드백');
+  });
+});
+
+describe('날짜별 진도 한눈에 보기', () => {
+  async function openRecordsPage() {
+    const ctx = await bootApp();
+    ctx.d.querySelector('button.nav-item[data-route="records"]').click();
+    await sleep(40);
+    return ctx;
+  }
+
+  it('같은 날 같은 학생의 학습·숙제 기록을 한 줄로 묶는다', async () => {
+    const { d } = await openRecordsPage();
+    const rows = Array.from(d.querySelectorAll('#records-daily-section .daily-record-row'));
+    // 홍길동 10/02(학습+숙제), 홍길동 10/09(숙제만), 김철수 10/03(숙제만) → 3줄
+    expect(rows.length).toBe(3);
+    const oct2 = rows.find((r) => r.textContent.includes('2026.10.02'));
+    expect(oct2.querySelector('.daily-study-cell').textContent).toContain('성조');
+    expect(oct2.querySelector('.daily-homework-cell').textContent).toContain('단어 20개');
+  });
+
+  it('최신 날짜가 맨 위에 오고, 한쪽 기록이 없으면 "기록 없음"으로 표시한다', async () => {
+    const { d } = await openRecordsPage();
+    const rows = Array.from(d.querySelectorAll('#records-daily-section .daily-record-row'));
+    expect(rows[0].textContent).toContain('2026.10.09');
+    expect(rows[0].querySelector('.daily-study-cell').textContent).toContain('학습 기록 없음');
+  });
+
+  it('학생 필터로 한 학생만 볼 수 있다', async () => {
+    const { w, d } = await openRecordsPage();
+    const sel = d.getElementById('daily-student-filter');
+    sel.value = '김철수';
+    sel.dispatchEvent(new w.Event('change', { bubbles: true }));
+    await sleep(10);
+    const rows = d.querySelectorAll('#records-daily-section .daily-record-row');
+    expect(rows.length).toBe(1);
+    expect(rows[0].textContent).toContain('다른 학생 숙제');
+  });
+
+  it('학생별 기록 창에도 그 학생의 날짜별 진도가 학생 칸 없이 나온다', async () => {
+    const { d } = await bootApp();
+    d.querySelector('.action-records[data-id="stu1"]').click();
+    await sleep(30);
+    const body = d.getElementById('student-records-modal-body');
+    const rows = body.querySelectorAll('.daily-record-row');
+    expect(rows.length).toBe(2);
+    expect(body.textContent).not.toContain('다른 학생 숙제');
+    expect(body.querySelector('.daily-records-table thead').textContent).not.toContain('학생');
+  });
+
+  it('기록을 불러오지 못하면 "기록 없음" 대신 실패 안내를 보여준다', async () => {
+    const ctx = await bootApp();
+    ctx.w.fetch = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) }));
+    ctx.d.querySelector('button.nav-item[data-route="records"]').click();
+    await sleep(40);
+    expect(ctx.d.getElementById('records-daily-section').textContent).toContain('불러오지 못했습니다');
+  });
+});
+
+describe('학생별 기록 모달 — 다시 그려져도 입력 유지', () => {
+  it('모달 숙제 폼에 쓰던 내용이 render() 후에도 남아 있다', async () => {
+    const { w, d } = await bootApp();
+    d.querySelector('.action-records[data-id="stu1"]').click();
+    await sleep(30);
+    const ta = d.getElementById('mhf-feedback');
+    ta.value = '모달에서 쓰던 내용';
+    ta.dispatchEvent(new w.Event('input', { bubbles: true }));
+    // 다른 화면 이벤트로 render() 가 돌게 만든다(회차 패널 열기).
+    d.querySelector('.action-sessions[data-id="stu1"]').click();
+    await sleep(10);
+    expect(d.getElementById('mhf-feedback').value).toBe('모달에서 쓰던 내용');
+  });
+});
+
 describe('숙제/학습 기록 프린트', () => {
   async function openRecordsAndPrint({ includeMemo = false, popup = true } = {}) {
     const ctx = await bootApp();

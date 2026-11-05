@@ -124,7 +124,6 @@
 
   const state = {
     route: "students", // "counseling" | "students" | "calendar" | "sales" | "records"
-    recordsTab: "homework", // 학습/숙제 기록 화면 내부 탭: "homework" | "study"
     students: [],
     isStudentsLoading: true, // Firestore 첫 스냅샷 도착 전까지 true
     counselingRecords: [],
@@ -174,6 +173,7 @@
     homeworkRecordsLoadedOnce: false,
     homeworkRecordsError: null,
     homeworkStudentFilter: "all", // "all" | studentName
+    dailyStudentFilter: "all", // 날짜별 진도(숙제+학습 한눈에 보기) 표의 학생 필터: "all" | studentName
     homeworkClassTypeFilter: "all", // "all" | "일반 회화반" | "자격증반"
     homeworkKeyword: "",
     homeworkDraft: emptyHomeworkDraft(),
@@ -3596,6 +3596,20 @@
     });
   }
 
+  // 폼에 입력 중인 값을 바로 state 의 draft 에 반영합니다. 한 화면에 숙제·학습 폼이 함께 있거나
+  // (기록 화면, 학생별 기록 모달) 비동기 로딩으로 render() 가 다시 돌아도 쓰던 내용이 사라지지 않게 합니다.
+  function bindFormDraftSync(form, draftKey) {
+    if (!form) return;
+    const sync = (e) => {
+      const el = e.target;
+      if (!el || !el.name) return;
+      if (!state[draftKey] || !(el.name in state[draftKey])) return;
+      state[draftKey] = Object.assign({}, state[draftKey], { [el.name]: el.value });
+    };
+    form.addEventListener("input", sync);
+    form.addEventListener("change", sync);
+  }
+
   function bindHomeworkFormBehaviors({ fieldPrefix, formId, submitId, cancelId, draftKey, editClass, deleteClass }) {
     const studentSelect = document.getElementById(`${fieldPrefix}-student`);
     if (studentSelect) {
@@ -3659,6 +3673,7 @@
         }
       });
       form.addEventListener("submit", (e) => handleHomeworkFormSubmit(e, { draftKey, submitBtnId: submitId }));
+      bindFormDraftSync(form, draftKey);
     }
   }
 
@@ -4125,37 +4140,194 @@
         }
       });
       form.addEventListener("submit", (e) => handleStudyFormSubmit(e, { draftKey, submitBtnId: submitId }));
+      bindFormDraftSync(form, draftKey);
     }
   }
 
   /* ----------------------------------------------------------
-   * 5-0c. 학습/숙제 기록 화면 (탭으로 통합)
+   * 5-0b2. 날짜별 진도 — 같은 날 같은 학생의 학습·숙제 기록을 한 줄로 묶어 보여줍니다.
+   * ---------------------------------------------------------- */
+  // 수업 날짜 + 학생 이름이 같은 숙제/학습 기록을 한 묶음으로 모읍니다(최신 날짜 → 이름 순).
+  function buildDailyRecordRows(homeworkRecords, studyRecords) {
+    const map = new Map();
+    const bucket = (r) => {
+      const classDate = String(r.classDate || "").slice(0, 10);
+      const studentName = r.studentName || "";
+      const key = `${classDate}\u0000${studentName}`;
+      if (!map.has(key)) map.set(key, { classDate, studentName, homework: [], study: [] });
+      return map.get(key);
+    };
+    (homeworkRecords || []).forEach((r) => bucket(r).homework.push(r));
+    (studyRecords || []).forEach((r) => bucket(r).study.push(r));
+    return Array.from(map.values()).sort(
+      (a, b) =>
+        b.classDate.localeCompare(a.classDate) || a.studentName.localeCompare(b.studentName, "ko")
+    );
+  }
+
+  function renderDailyStudyCell(list) {
+    if (!list.length) return `<span class="text-xs text-slate-400">학습 기록 없음</span>`;
+    return list
+      .map((r) => {
+        const levels =
+          r.comprehension || r.participation
+            ? `이해 ${escapeHtml(r.comprehension || "-")} · 참여 ${escapeHtml(r.participation || "-")}`
+            : "";
+        const meta = [r.attendance ? escapeHtml(r.attendance) : "", levels].filter(Boolean).join(" · ");
+        return `
+          <div class="daily-record-entry">
+            ${r.topic ? `<p class="font-semibold text-slate-900">${escapeHtml(r.topic)}</p>` : ""}
+            ${r.content ? `<p class="whitespace-pre-line text-slate-700">${escapeHtml(r.content)}</p>` : ""}
+            ${meta ? `<p class="mt-0.5 text-[11px] text-slate-500">${meta}</p>` : ""}
+            ${!r.topic && !r.content && !meta ? `<span class="text-xs text-slate-400">내용 미입력</span>` : ""}
+          </div>`;
+      })
+      .join("");
+  }
+
+  function renderDailyHomeworkCell(list) {
+    if (!list.length) return `<span class="text-xs text-slate-400">숙제 기록 없음</span>`;
+    return list
+      .map((r) => {
+        const submitted = r.submitted === "완료";
+        const checked = r.checked === "확인 완료";
+        return `
+          <div class="daily-record-entry">
+            ${r.homeworkText ? `<p class="whitespace-pre-line text-slate-700">${escapeHtml(r.homeworkText)}</p>` : `<span class="text-xs text-slate-400">숙제 내용 미입력</span>`}
+            <div class="mt-1 flex flex-wrap gap-1">
+              <span class="inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${submitted ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}">${escapeHtml(r.submitted || "미제출")}</span>
+              <span class="inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${checked ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}">${escapeHtml(r.checked || "미확인")}</span>
+            </div>
+          </div>`;
+      })
+      .join("");
+  }
+
+  function renderDailyNextPlanCell(list) {
+    const plans = list.map((r) => r.nextPlan).filter(Boolean);
+    if (!plans.length) return `<span class="text-xs text-slate-400">-</span>`;
+    return plans.map((p) => `<p class="whitespace-pre-line text-slate-700">${escapeHtml(p)}</p>`).join("");
+  }
+
+  // showStudent=false 는 학생 한 명만 보는 곳(학생별 기록 창)에서 학생 칸을 뺄 때 씁니다.
+  function renderDailyRecordsTable(rows, { showStudent = true, emptyText = "표시할 기록이 없습니다." } = {}) {
+    const loadingFirst =
+      (state.homeworkRecordsLoading && !state.homeworkRecordsLoadedOnce) ||
+      (state.studyRecordsLoading && !state.studyRecordsLoadedOnce);
+    const errors = [state.homeworkRecordsError, state.studyRecordsError].filter(Boolean);
+    const colCount = showStudent ? 5 : 4;
+    let bodyHtml;
+    if (loadingFirst) {
+      bodyHtml = `<tr><td colspan="${colCount}" class="px-4 py-10 text-center text-sm text-slate-500"><i class="fa-solid fa-rotate fa-spin mr-2"></i>불러오는 중…</td></tr>`;
+    } else if (!rows.length) {
+      bodyHtml = `<tr><td colspan="${colCount}" class="px-4 py-10 text-center text-sm text-slate-500">${escapeHtml(errors.length ? "기록을 불러오지 못했습니다. 새로고침해 주세요." : emptyText)}</td></tr>`;
+    } else {
+      bodyHtml = rows
+        .map(
+          (row) => `
+        <tr class="daily-record-row align-top">
+          <td class="whitespace-nowrap px-4 py-3 text-sm font-medium text-slate-700">${escapeHtml(formatDate(row.classDate))}</td>
+          ${
+            showStudent
+              ? `<td class="whitespace-nowrap px-4 py-3 text-sm font-medium">${
+                  row.studentName
+                    ? `<button type="button" class="records-row-student-name text-brand-700 hover:underline" data-student-name="${escapeHtml(row.studentName)}">${escapeHtml(row.studentName)}</button>`
+                    : "-"
+                }</td>`
+              : ""
+          }
+          <td class="daily-study-cell min-w-[220px] px-4 py-3 text-sm">${renderDailyStudyCell(row.study)}</td>
+          <td class="daily-homework-cell min-w-[200px] px-4 py-3 text-sm">${renderDailyHomeworkCell(row.homework)}</td>
+          <td class="min-w-[160px] px-4 py-3 text-sm">${renderDailyNextPlanCell(row.study)}</td>
+        </tr>`
+        )
+        .join("");
+    }
+    return `
+      ${errors.length ? `<p class="mb-2 text-xs text-rose-600">${errors.map(escapeHtml).join(" ")}</p>` : ""}
+      <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+        <table class="daily-records-table min-w-full divide-y divide-slate-200">
+          <thead class="bg-slate-50 text-left text-xs font-semibold text-slate-500">
+            <tr>
+              <th class="whitespace-nowrap px-4 py-3">수업 날짜</th>
+              ${showStudent ? `<th class="whitespace-nowrap px-4 py-3">학생</th>` : ""}
+              <th class="whitespace-nowrap px-4 py-3">학습 (어디까지 배웠나)</th>
+              <th class="whitespace-nowrap px-4 py-3">숙제</th>
+              <th class="whitespace-nowrap px-4 py-3">다음 수업 계획</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">${bodyHtml}</tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function renderDailyRecordsSection() {
+    const names = Array.from(
+      new Set(
+        state.students
+          .map((s) => s.name)
+          .concat(state.homeworkRecords.map((r) => r.studentName), state.studyRecords.map((r) => r.studentName))
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b, "ko"));
+    const filter = state.dailyStudentFilter;
+    const byStudent = (r) => filter === "all" || r.studentName === filter;
+    const rows = buildDailyRecordRows(state.homeworkRecords.filter(byStudent), state.studyRecords.filter(byStudent));
+    const options = ['<option value="all">전체 학생</option>']
+      .concat(
+        names.map(
+          (n) => `<option value="${escapeHtml(n)}"${filter === n ? " selected" : ""}>${escapeHtml(n)}</option>`
+        )
+      )
+      .join("");
+    return `
+      <section class="mb-6 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div>
+          <h2 class="text-xl font-semibold text-slate-900 md:text-2xl">날짜별 진도 한눈에 보기</h2>
+          <p class="mt-1 text-sm text-slate-500">같은 날 같은 학생의 학습 기록과 숙제 기록을 한 줄로 묶어 보여줍니다.</p>
+        </div>
+        <div>
+          <label class="sr-only" for="daily-student-filter">학생 필터</label>
+          <select id="daily-student-filter" class="form-input min-w-[180px] text-sm">${options}</select>
+        </div>
+      </section>
+      ${renderDailyRecordsTable(rows)}
+    `;
+  }
+
+  /* ----------------------------------------------------------
+   * 5-0c. 학습/숙제 기록 화면 (탭 없이 한 페이지에 숙제 → 학습 순서로 함께 표시)
    * ---------------------------------------------------------- */
   function renderRecordsView() {
-    const tab = state.recordsTab === "study" ? "study" : "homework";
-    const tabButton = (value, label) => `
-      <button
-        type="button"
-        class="records-tab-btn ${tab === value ? "is-active" : ""}"
-        data-records-tab="${value}"
-      >
-        ${escapeHtml(label)}
-      </button>
-    `;
     return `
-      <div class="records-tab-bar mb-6" role="tablist">
-        ${tabButton("homework", "숙제 기록")}
-        ${tabButton("study", "학습 기록")}
+      <nav class="records-jump-bar mb-6 flex flex-wrap gap-2" aria-label="기록 바로가기">
+        <button type="button" class="records-jump-btn" data-records-jump="records-daily-section">
+          <i class="fa-solid fa-calendar-day"></i>날짜별 진도
+        </button>
+        <button type="button" class="records-jump-btn" data-records-jump="records-homework-section">
+          <i class="fa-solid fa-pen-to-square"></i>숙제 기록
+        </button>
+        <button type="button" class="records-jump-btn" data-records-jump="records-study-section">
+          <i class="fa-solid fa-book"></i>학습 기록
+        </button>
+      </nav>
+      <div id="records-daily-section" class="scroll-mt-20">
+        ${renderDailyRecordsSection()}
       </div>
-      ${tab === "study" ? renderStudyView() : renderHomeworkView()}
+      <div id="records-homework-section" class="mt-10 scroll-mt-20 border-t border-slate-200 pt-8">
+        ${renderHomeworkView()}
+      </div>
+      <div id="records-study-section" class="mt-10 scroll-mt-20 border-t border-slate-200 pt-8">
+        ${renderStudyView()}
+      </div>
     `;
   }
 
   function bindRecordsViewEvents() {
-    document.querySelectorAll(".records-tab-btn").forEach((btn) => {
+    document.querySelectorAll(".records-jump-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
-        state.recordsTab = btn.dataset.recordsTab === "study" ? "study" : "homework";
-        render();
+        document.getElementById(btn.dataset.recordsJump)?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
     });
     document.querySelectorAll(".records-row-student-name").forEach((btn) => {
@@ -4168,8 +4340,15 @@
         openStudentRecordsModal(student.id);
       });
     });
-    if (state.recordsTab === "study") bindStudyViewEvents();
-    else bindHomeworkViewEvents();
+    const dailyFilter = document.getElementById("daily-student-filter");
+    if (dailyFilter) {
+      dailyFilter.addEventListener("change", () => {
+        state.dailyStudentFilter = String(dailyFilter.value || "all");
+        render();
+      });
+    }
+    bindHomeworkViewEvents();
+    bindStudyViewEvents();
   }
 
   /* ----------------------------------------------------------
@@ -7605,6 +7784,13 @@
         </div>
       </div>
       <div class="student-detail-sections">
+        <section class="student-detail-section">
+          <h3 class="student-detail-section-title">날짜별 진도 (학습 + 숙제)</h3>
+          ${renderDailyRecordsTable(
+            buildDailyRecordRows(getStudentHomeworkRecords(student), getStudentStudyRecords(student)),
+            { showStudent: false, emptyText: "이 학생의 기록이 아직 없습니다." }
+          )}
+        </section>
         ${renderRecordsModalHomeworkSection(student)}
         ${renderRecordsModalStudySection(student)}
       </div>
@@ -7617,8 +7803,10 @@
     if (!titleEl || !bodyEl) return;
 
     titleEl.textContent = `${student.name || "학생"} 숙제/학습 기록`;
+    // 로딩 완료·스냅샷 등으로 다시 그릴 때 보던 위치를 유지합니다(처음 열 때는 open 쪽에서 맨 위로).
+    const prevScrollTop = bodyEl.scrollTop;
     bodyEl.innerHTML = renderStudentRecordsModalContent(student);
-    bodyEl.scrollTop = 0;
+    bodyEl.scrollTop = prevScrollTop;
 
     bindHomeworkFormBehaviors({
       fieldPrefix: "mhf",
@@ -7656,6 +7844,8 @@
     if (!state.homeworkRecordsLoadedOnce && !state.homeworkRecordsLoading) loadHomeworkRecords();
     if (!state.studyRecordsLoadedOnce && !state.studyRecordsLoading) loadStudyRecords();
     fillStudentRecordsModal(student);
+    const recordsBody = document.getElementById("student-records-modal-body");
+    if (recordsBody) recordsBody.scrollTop = 0;
     modal.removeAttribute("hidden");
     modal.style.removeProperty("display");
     modal.classList.remove("hidden");
