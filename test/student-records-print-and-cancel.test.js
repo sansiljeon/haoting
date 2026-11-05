@@ -17,7 +17,7 @@ const appJs = readFileSync(join(publicDir, 'app.js'), 'utf-8');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const HOMEWORK = [
-  { id: 'h1', studentName: '홍길동', classDate: '2026-10-02', homeworkText: '단어 20개', feedback: '잘함', memo: '내부메모H', submitted: '완료', checked: '확인 완료' },
+  { id: 'h1', studentName: '홍길동', classDate: '2026-10-02', registeredSessions: '8회', homeworkText: '단어 20개', feedback: '잘함', memo: '내부메모H', submitted: '완료', checked: '확인 완료' },
   { id: 'h2', studentName: '홍길동', classDate: '2026-10-09', homeworkText: '문장 만들기', memo: '' },
   { id: 'h3', studentName: '김철수', classDate: '2026-10-03', homeworkText: '다른 학생 숙제' },
 ];
@@ -424,5 +424,80 @@ describe('리뷰 지적 수정 — 회귀 테스트', () => {
       await sleep(30);
       expect(d.querySelector('.student-records-duplicate-warning')).toBeNull();
     });
+  });
+});
+
+describe('등록 회차 직접 입력', () => {
+  async function openRecordsPage(opts) {
+    const ctx = await bootApp(opts);
+    ctx.d.querySelector('button.nav-item[data-route="records"]').click();
+    await sleep(40);
+    return ctx;
+  }
+  const type = (w, el, value) => {
+    el.value = value;
+    el.dispatchEvent(new w.Event('input', { bubbles: true }));
+  };
+  const lastPost = (w) => {
+    const calls = w.fetch.mock.calls.filter(([, opt]) => opt && (opt.method === 'POST' || opt.method === 'PATCH'));
+    return calls.length ? JSON.parse(calls.at(-1)[1].body) : null;
+  };
+
+  it('숙제·학습 폼 모두 등록 회차가 선택 목록이 아닌 숫자 입력칸이다', async () => {
+    const { d } = await openRecordsPage();
+    for (const id of ['hf-registered-sessions', 'sf-registered-sessions']) {
+      const el = d.getElementById(id);
+      expect(el.tagName).toBe('INPUT');
+      expect(el.type).toBe('number');
+    }
+  });
+
+  it('직접 입력한 숫자(예: 12)가 그대로 저장된다', async () => {
+    const { w, d } = await openRecordsPage();
+    d.getElementById('hf-student').value = 'stu1';
+    type(w, d.getElementById('hf-registered-sessions'), '12');
+    d.getElementById('homework-form').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
+    await sleep(40);
+    expect(lastPost(w).registeredSessions).toBe('12');
+  });
+
+  it('0 이나 숫자가 아닌 값은 저장하지 않고 안내한다', async () => {
+    const { w, d } = await openRecordsPage();
+    d.getElementById('sf-student').value = 'stu1';
+    type(w, d.getElementById('sf-registered-sessions'), '0');
+    d.getElementById('study-form').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
+    await sleep(20);
+    expect(lastPost(w)).toBeNull();
+    expect(d.getElementById('toast').textContent).toContain('등록 회차는 1 이상의 숫자');
+  });
+
+  it('비워 두면 등록 회차 없이 저장된다', async () => {
+    const { w, d } = await openRecordsPage();
+    d.getElementById('hf-student').value = 'stu1';
+    d.getElementById('homework-form').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
+    await sleep(40);
+    expect(lastPost(w).registeredSessions).toBe('');
+  });
+
+  it('예전 "8회" 형식 기록을 수정하면 칸에 8 로 보인다', async () => {
+    const { d } = await openRecordsPage();
+    d.querySelector('.homework-edit[data-id="h1"]').click();
+    await sleep(10);
+    expect(d.getElementById('hf-registered-sessions').value).toBe('8');
+  });
+
+  it('학생을 고르면 빈 칸에 그 학생의 등록 횟수를 채워 주고, 직접 입력한 값은 덮어쓰지 않는다', async () => {
+    const { w, d } = await openRecordsPage();
+    const sel = d.getElementById('hf-student');
+    const input = d.getElementById('hf-registered-sessions');
+    sel.value = 'stu1';
+    sel.dispatchEvent(new w.Event('change', { bubbles: true }));
+    expect(input.value).toBe('4'); // 픽스처 학생 registeredSessions: 4
+
+    input.value = '30';
+    input.dispatchEvent(new w.Event('input', { bubbles: true })); // 테스트 이벤트는 isTrusted=false
+    delete input.dataset.autofilled; // 사용자가 직접 고친 상황을 흉내
+    sel.dispatchEvent(new w.Event('change', { bubbles: true }));
+    expect(input.value).toBe('30');
   });
 });

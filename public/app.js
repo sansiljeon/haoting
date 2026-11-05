@@ -3100,7 +3100,22 @@
    * 독립된 두 화면으로 구성됩니다.
    * ---------------------------------------------------------- */
   const STUDY_CLASS_TYPES = ["일반 회화반", "자격증반"];
-  const STUDY_REGISTERED_SESSION_OPTIONS = [8, 16, 24];
+  // 숙제/학습 기록의 "등록 회차"는 선택 목록이 아니라 숫자를 직접 입력합니다.
+  // 예전 기록에 "8회"처럼 저장된 값도 숫자만 남겨 보여줍니다.
+  function normalizeRegisteredSessionsValue(value) {
+    return String(value ?? "").replace(/회$/, "").trim();
+  }
+
+  function isValidRegisteredSessions(value) {
+    const v = normalizeRegisteredSessionsValue(value);
+    return v === "" || (/^\d+$/.test(v) && Number(v) > 0);
+  }
+
+  function renderRegisteredSessionsInput(fieldPrefix, value) {
+    return `<input id="${fieldPrefix}-registered-sessions" name="registeredSessions" type="number" inputmode="numeric" min="1" step="1" class="form-input" placeholder="예: 8" value="${escapeHtml(
+      normalizeRegisteredSessionsValue(value)
+    )}" />`;
+  }
   const STUDY_LEVEL_OPTIONS = ["좋음", "보통", "부족"];
   const STUDY_ATTENDANCE_OPTIONS = ["출석", "결석", "보강"];
   const HOMEWORK_SUBMITTED_OPTIONS = ["완료", "미제출"];
@@ -3289,7 +3304,7 @@
           </div>
           <div>
             <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-registered-sessions">등록 회차</label>
-            ${renderSelectField(`${fieldPrefix}-registered-sessions`, "registeredSessions", STUDY_REGISTERED_SESSION_OPTIONS, d.registeredSessions ? Number(d.registeredSessions) : "", false)}
+            ${renderRegisteredSessionsInput(fieldPrefix, d.registeredSessions)}
           </div>
           <div>
             <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-class-type">반 구분</label>
@@ -3505,6 +3520,13 @@
       return;
     }
 
+    if (!isValidRegisteredSessions(fields.registeredSessions)) {
+      showToast("등록 회차는 1 이상의 숫자로 입력해 주세요.");
+      form.elements.registeredSessions?.focus();
+      return;
+    }
+    fields.registeredSessions = normalizeRegisteredSessionsValue(fields.registeredSessions);
+
     if (homeworkFormSubmitting) {
       showToast("저장 처리 중입니다. 잠시만 기다려 주세요.");
       return;
@@ -3612,6 +3634,7 @@
     const sync = (e) => {
       const el = e.target;
       if (!el || !el.name) return;
+      if (e.isTrusted && el.dataset) delete el.dataset.autofilled; // 사용자가 직접 고친 값
       if (!state[draftKey] || !(el.name in state[draftKey])) return;
       state[draftKey] = Object.assign({}, state[draftKey], { [el.name]: el.value });
     };
@@ -3625,9 +3648,13 @@
       studentSelect.addEventListener("change", () => {
         const student = findStudentById(studentSelect.value);
         const registeredSessionsInput = document.getElementById(`${fieldPrefix}-registered-sessions`);
-        if (student && registeredSessionsInput && STUDY_REGISTERED_SESSION_OPTIONS.includes(Number(student.registeredSessions))) {
-          registeredSessionsInput.value = String(student.registeredSessions);
-        }
+        // 비어 있거나 앞서 자동으로 채운 값이면 학생의 등록 횟수로 채워 줍니다.
+        // 사용자가 직접 입력한 값은 덮어쓰지 않습니다.
+        if (!student || !registeredSessionsInput || !(Number(student.registeredSessions) > 0)) return;
+        if (registeredSessionsInput.value && registeredSessionsInput.dataset.autofilled !== "1") return;
+        registeredSessionsInput.value = String(student.registeredSessions);
+        registeredSessionsInput.dispatchEvent(new Event("input", { bubbles: true }));
+        registeredSessionsInput.dataset.autofilled = "1";
       });
     }
 
@@ -3777,7 +3804,7 @@
           </div>
           <div>
             <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-registered-sessions">등록 회차</label>
-            ${renderSelectField(`${fieldPrefix}-registered-sessions`, "registeredSessions", STUDY_REGISTERED_SESSION_OPTIONS, d.registeredSessions ? Number(d.registeredSessions) : "", false)}
+            ${renderRegisteredSessionsInput(fieldPrefix, d.registeredSessions)}
           </div>
           <div>
             <label class="mb-1 block text-xs font-medium text-slate-600" for="${fieldPrefix}-class-type">반 구분</label>
@@ -3995,6 +4022,13 @@
       return;
     }
 
+    if (!isValidRegisteredSessions(fields.registeredSessions)) {
+      showToast("등록 회차는 1 이상의 숫자로 입력해 주세요.");
+      form.elements.registeredSessions?.focus();
+      return;
+    }
+    fields.registeredSessions = normalizeRegisteredSessionsValue(fields.registeredSessions);
+
     if (studyFormSubmitting) {
       showToast("저장 처리 중입니다. 잠시만 기다려 주세요.");
       return;
@@ -4092,9 +4126,13 @@
       studentSelect.addEventListener("change", () => {
         const student = findStudentById(studentSelect.value);
         const registeredSessionsInput = document.getElementById(`${fieldPrefix}-registered-sessions`);
-        if (student && registeredSessionsInput && STUDY_REGISTERED_SESSION_OPTIONS.includes(Number(student.registeredSessions))) {
-          registeredSessionsInput.value = String(student.registeredSessions);
-        }
+        // 비어 있거나 앞서 자동으로 채운 값이면 학생의 등록 횟수로 채워 줍니다.
+        // 사용자가 직접 입력한 값은 덮어쓰지 않습니다.
+        if (!student || !registeredSessionsInput || !(Number(student.registeredSessions) > 0)) return;
+        if (registeredSessionsInput.value && registeredSessionsInput.dataset.autofilled !== "1") return;
+        registeredSessionsInput.value = String(student.registeredSessions);
+        registeredSessionsInput.dispatchEvent(new Event("input", { bubbles: true }));
+        registeredSessionsInput.dataset.autofilled = "1";
       });
     }
 
